@@ -25,7 +25,6 @@ def make_gl_entries(gl_map, cancel=False, adv_adj=False, merge_entries=True, upd
 def process_gl_map(gl_map, merge_entries=True):
 	if merge_entries:
 		gl_map = merge_similar_entries(gl_map)
-
 	for entry in gl_map:
 		# toggle debit, credit if negative entry
 		if flt(entry.debit) < 0:
@@ -117,7 +116,13 @@ def round_off_debit_credit(gl_map):
 		debit_credit_diff += entry.debit - entry.credit
 
 	debit_credit_diff = flt(debit_credit_diff, precision)
-	if abs(debit_credit_diff) >= (5.0 / (10**precision)):
+	
+	if gl_map[0]["voucher_type"] == "Journal Entry":
+		allowance = 5.0 / (10**precision)
+	else:
+		allowance = 1
+	
+	if abs(debit_credit_diff) >= allowance:
 		frappe.throw(_("Debit and Credit not equal for {0} #{1}. Difference is {2}.")
 			.format(gl_map[0].voucher_type, gl_map[0].voucher_no, debit_credit_diff))
 
@@ -136,11 +141,13 @@ def make_round_off_gle(gl_map, debit_credit_diff):
 
 	round_off_gle = frappe._dict()
 	for k in ["voucher_type", "voucher_no", "company",
-		"posting_date", "remarks", "fiscal_year", "is_opening"]:
+		"posting_date", "remarks", "is_opening"]:
 			round_off_gle[k] = gl_map[0][k]
 
 	round_off_gle.update({
 		"account": round_off_account,
+		"debit_in_account_currency": abs(debit_credit_diff) if debit_credit_diff < 0 else 0,
+		"credit_in_account_currency": debit_credit_diff if debit_credit_diff > 0 else 0,
 		"debit": abs(debit_credit_diff) if debit_credit_diff < 0 else 0,
 		"credit": debit_credit_diff if debit_credit_diff > 0 else 0,
 		"cost_center": round_off_cost_center,

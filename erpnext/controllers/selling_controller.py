@@ -6,7 +6,8 @@ import frappe
 from frappe.utils import cint, flt, cstr, comma_or
 from erpnext.setup.utils import get_company_currency
 from frappe import _, throw
-from erpnext.stock.get_item_details import get_available_qty
+from erpnext.stock.get_item_details import get_bin_details
+from erpnext.stock.utils import get_incoming_rate
 
 from erpnext.controllers.stock_controller import StockController
 
@@ -24,7 +25,7 @@ class SellingController(StockController):
 	def onload(self):
 		if self.doctype in ("Sales Order", "Delivery Note", "Sales Invoice"):
 			for item in self.get("items"):
-				item.update(get_available_qty(item.item_code,
+				item.update(get_bin_details(item.item_code,
 					item.warehouse))
 
 	def validate(self):
@@ -51,7 +52,10 @@ class SellingController(StockController):
 
 		elif getattr(self, "lead", None):
 			from erpnext.crm.doctype.lead.lead import get_lead_details
-			self.update_if_missing(get_lead_details(self.lead))
+			self.update_if_missing(get_lead_details(
+				self.lead,
+				posting_date=self.get('transaction_date') or self.get('posting_date'),
+				company=self.company))
 
 	def set_price_list_and_item_details(self):
 		self.set_price_list_currency("Selling")
@@ -161,7 +165,7 @@ class SellingController(StockController):
 		for d in self.get("items"):
 			if d.qty is None:
 				frappe.throw(_("Row {0}: Qty is mandatory").format(d.idx))
-														
+
 			if self.has_product_bundle(d.item_code):
 				for p in self.get("packed_items"):
 					if p.parent_detail_docname == d.name and p.parent_item == d.item_code:
@@ -199,17 +203,17 @@ class SellingController(StockController):
 			where so_detail = %s and docstatus = 1
 			and against_sales_order = %s
 			and parent != %s""", (so_detail, so, current_docname))
-			
-		delivered_via_si = frappe.db.sql("""select sum(si_item.qty) 
+
+		delivered_via_si = frappe.db.sql("""select sum(si_item.qty)
 			from `tabSales Invoice Item` si_item, `tabSales Invoice` si
 			where si_item.parent = si.name and si.update_stock = 1
-			and si_item.so_detail = %s and si.docstatus = 1 
+			and si_item.so_detail = %s and si.docstatus = 1
 			and si_item.sales_order = %s
 			and si.name != %s""", (so_detail, so, current_docname))
-			
+
 		total_delivered_qty = (flt(delivered_via_dn[0][0]) if delivered_via_dn else 0) \
 			+ (flt(delivered_via_si[0][0]) if delivered_via_si else 0)
-		
+
 		return total_delivered_qty
 
 	def get_so_qty_and_warehouse(self, so_detail):
@@ -219,21 +223,93 @@ class SellingController(StockController):
 		so_warehouse = so_item and so_item[0]["warehouse"] or ""
 		return so_qty, so_warehouse
 
-	def check_stop_or_close_sales_order(self, ref_fieldname):
+	def check_close_sales_order(self, ref_fieldname):
 		for d in self.get("items"):
 			if d.get(ref_fieldname):
 				status = frappe.db.get_value("Sales Order", d.get(ref_fieldname), "status")
-				if status in ("Stopped", "Closed"):
+				if status == "Closed":
 					frappe.throw(_("Sales Order {0} is {1}").format(d.get(ref_fieldname), status))
+					
+	def update_reserved_qty(self):
+		so_map = {}
+		for d in self.get("items"):
+			if d.so_detail:
+				if self.doctype == "Delivery Note" and d.against_sales_order:
+					so_map.setdefault(d.against_sales_order, []).append(d.so_detail)
+				elif self.doctype == "Sales Invoice" and d.sales_order and self.update_stock:
+					so_map.setdefault(d.sales_order, []).append(d.so_detail)
+
+		for so, so_item_rows in so_map.items():
+			if so and so_item_rows:
+				sales_order = frappe.get_doc("Sales Order", so)
+
+				if sales_order.status in ["Closed", "Cancelled"]:
+					frappe.throw(_("{0} {1} is cancelled or closed").format(_("Sales Order"), so),
+						frappe.InvalidStatusError)
+
+				sales_order.update_reserved_qty(so_item_rows)
+
+	def update_stock_ledger(self):
+		self.update_reserved_qty()
+
+		sl_entries = []
+		for d in self.get_item_list():
+			if frappe.db.get_value("Item", d.item_code, "is_stock_item") == 1 and flt(d.qty):
+				return_rate = 0
+				if cint(self.is_return) and self.return_against and self.docstatus==1:
+					return_rate = self.get_incoming_rate_for_sales_return(d.item_code, self.return_against)
+
+				# On cancellation or if return entry submission, make stock ledger entry for
+				# target warehouse first, to update serial no values properly
+
+				if d.warehouse and ((not cint(self.is_return) and self.docstatus==1)
+					or (cint(self.is_return) and self.docstatus==2)):
+						sl_entries.append(self.get_sl_entries(d, {
+							"actual_qty": -1*flt(d.qty),
+							"incoming_rate": return_rate
+						}))
+
+				if d.target_warehouse:
+					target_warehouse_sle = self.get_sl_entries(d, {
+						"actual_qty": flt(d.qty),
+						"warehouse": d.target_warehouse
+					})
+
+					if self.docstatus == 1:
+						if not cint(self.is_return):
+							args = frappe._dict({
+								"item_code": d.item_code,
+								"warehouse": d.warehouse,
+								"posting_date": self.posting_date,
+								"posting_time": self.posting_time,
+								"qty": -1*flt(d.qty),
+								"serial_no": d.serial_no
+							})
+							target_warehouse_sle.update({
+								"incoming_rate": get_incoming_rate(args)
+							})
+						else:
+							target_warehouse_sle.update({
+								"outgoing_rate": return_rate
+							})
+					sl_entries.append(target_warehouse_sle)
+
+				if d.warehouse and ((not cint(self.is_return) and self.docstatus==2)
+					or (cint(self.is_return) and self.docstatus==1)):
+						sl_entries.append(self.get_sl_entries(d, {
+							"actual_qty": -1*flt(d.qty),
+							"incoming_rate": return_rate
+						}))
+
+		self.make_sl_entries(sl_entries)
 
 def check_active_sales_items(obj):
 	for d in obj.get("items"):
 		if d.item_code:
-			item = frappe.db.sql("""select docstatus, is_sales_item,
-				is_service_item, income_account from tabItem where name = %s""",
+			item = frappe.db.sql("""select docstatus,
+				income_account from tabItem where name = %s""",
 				d.item_code, as_dict=True)[0]
-			if item.is_sales_item == 0 and item.is_service_item == 0:
-				frappe.throw(_("Item {0} must be Sales or Service Item in {1}").format(d.item_code, d.idx))
+                
 			if getattr(d, "income_account", None) and not item.income_account:
 				frappe.db.set_value("Item", d.item_code, "income_account",
 					d.income_account)

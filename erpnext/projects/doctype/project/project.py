@@ -4,7 +4,7 @@
 from __future__ import unicode_literals
 import frappe
 
-from frappe.utils import flt, getdate
+from frappe.utils import flt, getdate, get_url
 from frappe import _
 
 from frappe.model.document import Document
@@ -26,6 +26,10 @@ class Project(Document):
 					"task_id": task.name
 				})
 
+		self.set_onload('links', self.meta.get_links_setup())
+		self.set_onload('activity_summary', frappe.db.sql('''select activity_type, sum(hours) as total_hours
+			from `tabTime Log` where project=%s group by activity_type order by total_hours desc''', self.name, as_dict=True))
+
 	def __setup__(self):
 		self.onload()
 
@@ -36,6 +40,7 @@ class Project(Document):
 		self.validate_dates()
 		self.sync_tasks()
 		self.tasks = []
+		self.send_welcome_email()
 
 	def validate_dates(self):
 		if self.expected_start_date and self.expected_end_date:
@@ -64,6 +69,7 @@ class Project(Document):
 
 			task.flags.ignore_links = True
 			task.flags.from_project = True
+			task.flags.ignore_feed = True
 			task.save(ignore_permissions = True)
 			task_names.append(task.name)
 
@@ -78,7 +84,7 @@ class Project(Document):
 		self.update_percent_complete()
 		self.update_costing()
 		self.flags.dont_sync_tasks = True
-		self.save()
+		self.save(ignore_permissions = True)
 
 	def update_percent_complete(self):
 		total = frappe.db.sql("""select count(*) from tabTask where project=%s""", self.name)[0][0]
@@ -119,10 +125,73 @@ class Project(Document):
 
 	def update_purchase_costing(self):
 		total_purchase_cost = frappe.db.sql("""select sum(base_net_amount)
-			from `tabPurchase Invoice Item` where project_name = %s and docstatus=1""", self.name)
+			from `tabPurchase Invoice Item` where project = %s and docstatus=1""", self.name)
 
 		self.total_purchase_cost = total_purchase_cost and total_purchase_cost[0][0] or 0
 
+	def send_welcome_email(self):
+		url = get_url("/project/?name={0}".format(self.name))
+		messages = (
+		_("You have been invited to collaborate on the project: {0}".format(self.name)),
+		url,
+		_("Join")
+		)
+
+		content = """
+		<p>{0}.</p>
+		<p><a href="{1}">{2}</a></p>
+		"""
+
+		for user in self.users:
+			if user.welcome_email_sent==0:
+				frappe.sendmail(user.user, subject=_("Project Collaboration Invitation"), content=content.format(*messages), bulk=True)
+				user.welcome_email_sent=1
+
+
 @frappe.whitelist()
-def get_cost_center_name(project_name):
-	return frappe.db.get_value("Project", project_name, "cost_center")
+def get_dashboard_data(name):
+	'''load dashboard related data'''
+	frappe.has_permission(doc=frappe.get_doc('Project', name), throw=True)
+
+	from frappe.desk.notifications import get_open_count
+	return {
+		'count': get_open_count('Project', name),
+		'timeline_data': get_timeline_data(name)
+	}
+
+def get_timeline_data(name):
+	'''Return timeline for attendance'''
+	return dict(frappe.db.sql('''select unix_timestamp(from_time), count(*)
+		from `tabTime Log` where project=%s
+			and from_time > date_sub(curdate(), interval 1 year)
+			and docstatus < 2
+			group by date(from_time)''', name))
+
+def get_project_list(doctype, txt, filters, limit_start, limit_page_length=20):
+	return frappe.db.sql('''select distinct project.*
+		from tabProject project, `tabProject User` project_user
+		where
+			(project_user.user = %(user)s
+			and project_user.parent = project.name)
+			or project.owner = %(user)s
+			order by project.modified desc
+			limit {0}, {1}
+		'''.format(limit_start, limit_page_length),
+			{'user':frappe.session.user},
+			as_dict=True,
+			update={'doctype':'Project'})
+
+def get_list_context(context=None):
+	return {
+		"show_sidebar": True,
+		"show_search": True,
+		'no_breadcrumbs': True,
+		"title": _("Projects"),
+		"get_list": get_project_list,
+		"row_template": "templates/includes/projects/project_row.html"
+	}
+
+
+@frappe.whitelist()
+def get_cost_center_name(project):
+	return frappe.db.get_value("Project", project, "cost_center")

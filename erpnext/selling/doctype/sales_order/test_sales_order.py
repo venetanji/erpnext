@@ -93,12 +93,12 @@ class TestSalesOrder(unittest.TestCase):
 		dn = create_dn_against_so(so.name)
 		self.assertEqual(get_reserved_qty(), existing_reserved_qty + 5)
 
-		# stop so
+		# close so
 		so.load_from_db()
-		so.update_status("Stopped")
+		so.update_status("Closed")
 		self.assertEqual(get_reserved_qty(), existing_reserved_qty)
 
-		# unstop so
+		# unclose so
 		so.load_from_db()
 		so.update_status('Draft')
 		self.assertEqual(get_reserved_qty(), existing_reserved_qty + 5)
@@ -126,6 +126,34 @@ class TestSalesOrder(unittest.TestCase):
 
 		dn.cancel()
 		self.assertEqual(get_reserved_qty(), existing_reserved_qty + 10)
+		
+	def test_reserved_qty_for_over_delivery_via_sales_invoice(self):
+		# set over-delivery tolerance
+		frappe.db.set_value('Item', "_Test Item", 'tolerance', 50)
+
+		existing_reserved_qty = get_reserved_qty()
+
+		so = make_sales_order()
+		self.assertEqual(get_reserved_qty(), existing_reserved_qty + 10)
+
+		si = make_sales_invoice(so.name)
+		si.update_stock = 1
+		si.get("items")[0].qty = 12
+		si.insert()
+		si.submit()
+		
+		self.assertEqual(get_reserved_qty(), existing_reserved_qty)
+		
+		so.load_from_db()
+		self.assertEqual(so.get("items")[0].delivered_qty, 12)
+		self.assertEqual(so.per_delivered, 100)
+
+		si.cancel()
+		self.assertEqual(get_reserved_qty(), existing_reserved_qty + 10)
+		
+		so.load_from_db()
+		self.assertEqual(so.get("items")[0].delivered_qty, 0)
+		self.assertEqual(so.per_delivered, 0)
 
 	def test_reserved_qty_for_partial_delivery_with_packing_list(self):
 		existing_reserved_qty_item1 = get_reserved_qty("_Test Item")
@@ -143,14 +171,14 @@ class TestSalesOrder(unittest.TestCase):
 		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"),
 			existing_reserved_qty_item2 + 10)
 
-		# stop so
+		# close so
 		so.load_from_db()
-		so.update_status("Stopped")
+		so.update_status("Closed")
 
 		self.assertEqual(get_reserved_qty("_Test Item"), existing_reserved_qty_item1)
 		self.assertEqual(get_reserved_qty("_Test Item Home Desktop 100"), existing_reserved_qty_item2)
 
-		# unstop so
+		# unclose so
 		so.load_from_db()
 		so.update_status('Draft')
 
@@ -238,9 +266,9 @@ class TestSalesOrder(unittest.TestCase):
 		from erpnext.stock.doctype.item.test_item import make_item
 		from erpnext.selling.doctype.product_bundle.test_product_bundle import make_product_bundle
 
-		make_item("_Test Service Product Bundle", {"is_stock_item": 0, "is_pro_applicable": 0, "is_sales_item": 1})
-		make_item("_Test Service Product Bundle Item 1", {"is_stock_item": 0, "is_pro_applicable": 0, "is_sales_item": 1})
-		make_item("_Test Service Product Bundle Item 2", {"is_stock_item": 0, "is_pro_applicable": 0, "is_sales_item": 1})
+		make_item("_Test Service Product Bundle", {"is_stock_item": 0})
+		make_item("_Test Service Product Bundle Item 1", {"is_stock_item": 0})
+		make_item("_Test Service Product Bundle Item 2", {"is_stock_item": 0})
 
 		make_product_bundle("_Test Service Product Bundle",
 			["_Test Service Product Bundle Item 1", "_Test Service Product Bundle Item 2"])
@@ -254,9 +282,9 @@ class TestSalesOrder(unittest.TestCase):
 		from erpnext.stock.doctype.item.test_item import make_item
 		from erpnext.selling.doctype.product_bundle.test_product_bundle import make_product_bundle
 
-		make_item("_Test Mix Product Bundle", {"is_stock_item": 0, "is_pro_applicable": 0, "is_sales_item": 1})
-		make_item("_Test Mix Product Bundle Item 1", {"is_stock_item": 1, "is_sales_item": 1})
-		make_item("_Test Mix Product Bundle Item 2", {"is_stock_item": 0, "is_pro_applicable": 0, "is_sales_item": 1})
+		make_item("_Test Mix Product Bundle", {"is_stock_item": 0})
+		make_item("_Test Mix Product Bundle Item 1", {"is_stock_item": 1})
+		make_item("_Test Mix Product Bundle Item 2", {"is_stock_item": 0})
 
 		make_product_bundle("_Test Mix Product Bundle",
 			["_Test Mix Product Bundle Item 1", "_Test Mix Product Bundle Item 2"])
@@ -265,7 +293,7 @@ class TestSalesOrder(unittest.TestCase):
 
 	def test_auto_insert_price(self):
 		from erpnext.stock.doctype.item.test_item import make_item
-		make_item("_Test Item for Auto Price List", {"is_stock_item": 0, "is_pro_applicable": 0, "is_sales_item": 1})
+		make_item("_Test Item for Auto Price List", {"is_stock_item": 0})
 		frappe.db.set_value("Stock Settings", None, "auto_insert_price_list_rate_if_missing", 1)
 
 		item_price = frappe.db.get_value("Item Price", {"price_list": "_Test Price List",
@@ -299,14 +327,13 @@ class TestSalesOrder(unittest.TestCase):
 		from erpnext.stock.doctype.item.test_item import make_item
 		from erpnext.buying.doctype.purchase_order.purchase_order import update_status
 
-		po_item = make_item("_Test Item for Drop Shipping", {"is_stock_item": 1, "is_sales_item": 1,
-			"is_purchase_item": 1, "delivered_by_supplier": 1, 'default_supplier': '_Test Supplier',
+		po_item = make_item("_Test Item for Drop Shipping", {"is_stock_item": 1, "delivered_by_supplier": 1,
+        'default_supplier': '_Test Supplier',
 		    "expense_account": "_Test Account Cost for Goods Sold - _TC",
 		    "cost_center": "_Test Cost Center - _TC"
 			})
 
-		dn_item = make_item("_Test Regular Item", {"is_stock_item": 1, "is_sales_item": 1,
-			"is_purchase_item": 1, "expense_account": "_Test Account Cost for Goods Sold - _TC",
+		dn_item = make_item("_Test Regular Item", {"is_stock_item": 1, "expense_account": "_Test Account Cost for Goods Sold - _TC",
   		  	"cost_center": "_Test Cost Center - _TC"})
 
 		so_items = [
@@ -334,8 +361,8 @@ class TestSalesOrder(unittest.TestCase):
 		existing_ordered_qty = bin[0].ordered_qty if bin else 0.0
 		existing_reserved_qty = bin[0].reserved_qty if bin else 0.0
 
-		bin = frappe.get_all("Bin", filters={"item_code": dn_item.item_code, "warehouse": "_Test Warehouse - _TC"},
-			fields=["reserved_qty"])
+		bin = frappe.get_all("Bin", filters={"item_code": dn_item.item_code,
+			"warehouse": "_Test Warehouse - _TC"}, fields=["reserved_qty"])
 
 		existing_reserved_qty_for_dn_item = bin[0].reserved_qty if bin else 0.0
 
@@ -415,6 +442,21 @@ class TestSalesOrder(unittest.TestCase):
 
 		self.assertEquals(get_reserved_qty(item_code="_Test Item", warehouse="_Test Warehouse - _TC"), existing_reserved_qty)
 
+	def test_create_so_with_margin(self):
+		so = make_sales_order(item_code="_Test Item", qty=1, do_not_submit=True)
+		so.items[0].price_list_rate = price_list_rate = 100
+		so.items[0].margin_type = 'Percentage'
+		so.items[0].margin_rate_or_amount = 25
+		so.insert()
+
+		new_so = frappe.copy_doc(so)
+		new_so.save(ignore_permissions=True)
+
+		self.assertEquals(new_so.get("items")[0].rate, flt((price_list_rate*25)/100 + price_list_rate))
+		new_so.items[0].margin_rate_or_amount = 25
+		new_so.submit()
+
+		self.assertEquals(new_so.get("items")[0].rate, flt((price_list_rate*25)/100 + price_list_rate))
 
 def make_sales_order(**args):
 	so = frappe.new_doc("Sales Order")

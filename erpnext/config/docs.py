@@ -19,9 +19,10 @@ docs_version = "6.x.x"
 splash_light_background = True
 
 def get_context(context):
+	context.brand_html = "ERPNext"
 	context.app.splash_light_background = True
 	context.top_bar_items = [
 		{"label": "User Manual", "url": context.docs_base_url + "/user/manual", "right": 1},
 		{"label": "Videos", "url": context.docs_base_url + "/user/videos", "right": 1},
-		{"label": "Developer Docs", "url": context.docs_base_url + "/current", "right": 1}
+		{"label": "API Documentation", "url": context.docs_base_url + "/current", "right": 1}
 	]

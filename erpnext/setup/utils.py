@@ -43,13 +43,15 @@ def before_tests():
 			"company_abbr"		:"WP",
 			"industry"			:"Manufacturing",
 			"country"			:"United States",
-			"fy_start_date"		:"2014-01-01",
-			"fy_end_date"		:"2014-12-31",
+			"fy_start_date"		:"2011-01-01",
+			"fy_end_date"		:"2011-12-31",
 			"language"			:"english",
 			"company_tagline"	:"Testing",
 			"email"				:"test@erpnext.com",
 			"password"			:"test",
-			"chart_of_accounts" : "Standard"
+			"chart_of_accounts" : "Standard",
+			"domain"			: "Manufacturing",
+			
 		})
 
 	frappe.db.sql("delete from `tabLeave Allocation`")

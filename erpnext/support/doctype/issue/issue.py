@@ -41,7 +41,7 @@ class Issue(Document):
 
 			if not self.company:
 				self.company = frappe.db.get_value("Lead", self.lead, "company") or \
-					frappe.db.get_default("company")
+					frappe.db.get_default("Company")
 
 	def update_status(self):
 		status = frappe.db.get_value("Issue", self.name, "status")
@@ -55,9 +55,12 @@ class Issue(Document):
 
 def get_list_context(context=None):
 	return {
-		"title": _("My Issues"),
+		"title": _("Issues"),
 		"get_list": get_issue_list,
-		"row_template": "templates/includes/issue_row.html"
+		"row_template": "templates/includes/issue_row.html",
+		"show_sidebar": True,
+		"show_search": True,
+		'no_breadcrumbs': True
 	}
 
 def get_issue_list(doctype, txt, filters, limit_start, limit_page_length=20):

@@ -16,9 +16,9 @@ upcoming release.
 
 To create your own versions, open an existing template from:
 
-> Setup > Printing > Print Formats
+`Setup > Printing > Print Formats`
 
-![Print Format]({{docs_base_url}}/assets/old_images/erpnext/customize/print-format.png)
+<img alt="Print Format" class="screenshot" src="{{docs_base_url}}/assets/img/customize/print-format.png">
 
 Select the type of Print Format you want to edit and click on the “Copy”
 button on the right column. A new Print Format will open up with “Is Standard”
@@ -29,7 +29,7 @@ HTML, CSS, Python to learn this. For help, please post on our forum.
 
 Print Formats are rendered on the server side using the [Jinja Templating Language](http://jinja.pocoo.org/docs/templates/). All forms have access to the doc object which contains information about the document that is being formatted. You can also access common utilities via the frappe module.
 
-For styling, the [Boostrap CSS Framework](http://getbootstrap.com/) is provided and you can enjoy the full range of classes.
+For styling, the [Bootstrap CSS Framework](http://getbootstrap.com/) is provided and you can enjoy the full range of classes.
 
 > Note: Pre-printed stationary is usually not a good idea because your Prints
 will look incomplete (inconsistent) when you send them by mail.
@@ -43,9 +43,9 @@ will look incomplete (inconsistent) when you send them by mail.
 
 To edit / update your print and PDF settings, go to:
 
-> Setup > Printing and Branding > Print Settings
+`Setup > Printing and Branding > Print Settings`
 
-![Print Format]({{docs_base_url}}/assets/old_images/erpnext/customize/print-settings.png)
+<img alt="Print Format" class="screenshot" src="{{docs_base_url}}/assets/img/customize/print-settings.png">
 
 #### Example
 

@@ -16,6 +16,7 @@ $.extend(shopping_cart, {
 		shopping_cart.bind_address_select();
 		shopping_cart.bind_place_order();
 		shopping_cart.bind_change_qty();
+		shopping_cart.bind_remove_item();
 
 	},
 
@@ -65,11 +66,29 @@ $.extend(shopping_cart, {
 					if(!r.exc) {
 						$(".cart-items").html(r.message.items);
 						$(".cart-tax-items").html(r.message.taxes);
+						$(".cart-icon").hide();
 					}
 				},
 			});
 		});
-
+	},
+	
+	bind_remove_item: function() {
+		$(".cart-items").on("click", ".remove-item", function() {
+			var item_code = $(this).attr("data-item-code");
+			shopping_cart.update_cart({
+				item_code: item_code,
+				qty: "0",
+				callback: function(r) {
+					location.reload();
+					if(!r.exc) {
+						$(".cart-items").html(r.message.items);
+						$(".cart-tax-items").html(r.message.taxes);
+						$(".cart-icon").hide();
+					}
+				},
+			});
+		});
 	},
 
 	render_tax_row: function($cart_taxes, doc, shipping_rules) {
@@ -144,5 +163,11 @@ $.extend(shopping_cart, {
 });
 
 $(document).ready(function() {
+	$(".cart-icon").hide();
 	shopping_cart.bind_events();
 });
+
+function show_terms() {
+  var html = $(".cart-terms").html();
+    frappe.msgprint(html);
+}

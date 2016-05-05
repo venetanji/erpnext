@@ -1,7 +1,7 @@
 // Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 // License: GNU General Public License v3. See license.txt
 
-{% include 'selling/sales_common.js' %}
+{% include 'erpnext/selling/sales_common.js' %}
 
 frappe.ui.form.on("Sales Order", {
 	onload: function(frm) {
@@ -19,7 +19,7 @@ erpnext.selling.SalesOrderController = erpnext.selling.SellingController.extend(
 		var allow_delivery = false;
 
 		if(doc.docstatus==1) {
-			if(doc.status != 'Stopped' && doc.status != 'Closed') {
+			if(doc.status != 'Closed') {
 
 				for (var i in cur_frm.doc.items) {
 					var item = cur_frm.doc.items[i];
@@ -41,58 +41,57 @@ erpnext.selling.SalesOrderController = erpnext.selling.SellingController.extend(
 					}
 				}
 
-				// material request
-				if(!doc.order_type || ["Sales", "Shopping Cart"].indexOf(doc.order_type)!==-1
-					&& flt(doc.per_delivered, 2) < 100) {
-						cur_frm.add_custom_button(__('Material Request'), this.make_material_request);
-				}
-
-				// make purchase order
-				if(flt(doc.per_delivered, 2) < 100 && allow_purchase) {
-					cur_frm.add_custom_button(__('Purchase Order'), cur_frm.cscript.make_purchase_order);
-				}
-
-				if(flt(doc.per_billed)==0) {
-					cur_frm.add_custom_button(__('Payment'), cur_frm.cscript.make_bank_entry);
-				}
-
 				if (this.frm.has_perm("submit")) {
-					// stop
+					// close
 					if(flt(doc.per_delivered, 2) < 100 || flt(doc.per_billed) < 100) {
-							cur_frm.add_custom_button(__('Stop'), this.stop_sales_order)
+							cur_frm.add_custom_button(__('Close'), this.close_sales_order, __("Status"))
 						}
-
-
-					cur_frm.add_custom_button(__('Close'), this.close_sales_order)
-				}
-
-				// maintenance
-				if(flt(doc.per_delivered, 2) < 100 && ["Sales", "Shopping Cart"].indexOf(doc.order_type)===-1) {
-					cur_frm.add_custom_button(__('Maint. Visit'), this.make_maintenance_visit);
-					cur_frm.add_custom_button(__('Maint. Schedule'), this.make_maintenance_schedule);
 				}
 
 				// delivery note
 				if(flt(doc.per_delivered, 2) < 100 && ["Sales", "Shopping Cart"].indexOf(doc.order_type)!==-1 && allow_delivery) {
-					cur_frm.add_custom_button(__('Delivery'), this.make_delivery_note).addClass("btn-primary");
+					cur_frm.add_custom_button(__('Delivery'), this.make_delivery_note, __("Make"));
+					cur_frm.page.set_inner_btn_group_as_primary(__("Make"));
 				}
 
 				// sales invoice
 				if(flt(doc.per_billed, 2) < 100) {
-					cur_frm.add_custom_button(__('Invoice'), this.make_sales_invoice).addClass("btn-primary");
+					cur_frm.add_custom_button(__('Invoice'), this.make_sales_invoice, __("Make"));
+				}
+
+				// material request
+				if(!doc.order_type || ["Sales", "Shopping Cart"].indexOf(doc.order_type)!==-1
+					&& flt(doc.per_delivered, 2) < 100) {
+						cur_frm.add_custom_button(__('Material Request'), this.make_material_request, __("Make"));
+				}
+
+				// make purchase order
+				if(flt(doc.per_delivered, 2) < 100 && allow_purchase) {
+					cur_frm.add_custom_button(__('Purchase Order'), cur_frm.cscript.make_purchase_order, __("Make"));
+				}
+
+				if(flt(doc.per_billed)==0) {
+					cur_frm.add_custom_button(__('Payment Request'), this.make_payment_request, __("Make"));
+					cur_frm.add_custom_button(__('Payment'), cur_frm.cscript.make_bank_entry, __("Make"));
+				}
+
+				// maintenance
+				if(flt(doc.per_delivered, 2) < 100 && ["Sales", "Shopping Cart"].indexOf(doc.order_type)===-1) {
+					cur_frm.add_custom_button(__('Maintenance Visit'), this.make_maintenance_visit, __("Make"));
+					cur_frm.add_custom_button(__('Maintenance Schedule'), this.make_maintenance_schedule, __("Make"));
 				}
 
 
 			} else {
 				if (this.frm.has_perm("submit")) {
-					// un-stop
-					cur_frm.add_custom_button(__('Re-open'), cur_frm.cscript['Unstop Sales Order']);
+					// un-close
+					cur_frm.add_custom_button(__('Re-open'), cur_frm.cscript['Unclose Sales Order'], __("Status"));
 				}
 			}
 		}
 
 		if (this.frm.doc.docstatus===0) {
-			cur_frm.add_custom_button(__('From Quotation'),
+			cur_frm.add_custom_button(__('Quotation'),
 				function() {
 					frappe.model.map_current_doc({
 						method: "erpnext.selling.doctype.quotation.quotation.make_sales_order",
@@ -105,7 +104,7 @@ erpnext.selling.SalesOrderController = erpnext.selling.SellingController.extend(
 							company: cur_frm.doc.company
 						}
 					})
-				});
+				}, __("Get items from"));
 		}
 
 		this.order_type(doc);
@@ -118,21 +117,7 @@ erpnext.selling.SalesOrderController = erpnext.selling.SellingController.extend(
 	tc_name: function() {
 		this.get_terms();
 	},
-
-	warehouse: function(doc, cdt, cdn) {
-		var item = frappe.get_doc(cdt, cdn);
-		if(item.item_code && item.warehouse) {
-			return this.frm.call({
-				method: "erpnext.stock.get_item_details.get_available_qty",
-				child: item,
-				args: {
-					item_code: item.item_code,
-					warehouse: item.warehouse,
-				},
-			});
-		}
-	},
-
+	
 	make_material_request: function() {
 		frappe.model.open_mapped_doc({
 			method: "erpnext.selling.doctype.sales_order.sales_order.make_material_request",
@@ -218,9 +203,6 @@ erpnext.selling.SalesOrderController = erpnext.selling.SellingController.extend(
 		});
 		dialog.show();
 	},
-	stop_sales_order: function(){
-		cur_frm.cscript.update_status("Stop", "Stopped")
-	},
 	close_sales_order: function(){
 		cur_frm.cscript.update_status("Close", "Closed")
 	}
@@ -234,10 +216,10 @@ cur_frm.cscript.new_contact = function(){
 	tn = frappe.model.make_new_doc_and_get_name('Contact');
 	locals['Contact'][tn].is_customer = 1;
 	if(doc.customer) locals['Contact'][tn].customer = doc.customer;
-	loaddoc('Contact', tn);
+	frappe.set_route('Form', 'Contact', tn);
 }
 
-cur_frm.fields_dict['project_name'].get_query = function(doc, cdt, cdn) {
+cur_frm.fields_dict['project'].get_query = function(doc, cdt, cdn) {
 	return {
 		query: "erpnext.controllers.queries.get_project_name",
 		filters: {
@@ -261,7 +243,7 @@ cur_frm.cscript.update_status = function(label, status){
 	});
 }
 
-cur_frm.cscript['Unstop Sales Order'] = function() {
+cur_frm.cscript['Unclose Sales Order'] = function() {
 	cur_frm.cscript.update_status('Re-open', 'Draft')
 }
 

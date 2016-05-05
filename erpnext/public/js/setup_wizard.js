@@ -9,131 +9,8 @@ frappe.pages['setup-wizard'].on_page_load = function(wrapper) {
 
 function load_erpnext_slides() {
 	$.extend(erpnext.wiz, {
-		region: {
-			title: __("Region"),
-			icon: "icon-flag",
-			help: __("Select your Country, Time Zone and Currency"),
-			fields: [
-				{ fieldname: "country", label: __("Country"), reqd:1,
-					fieldtype: "Select" },
-				{ fieldname: "timezone", label: __("Time Zone"), reqd:1,
-					fieldtype: "Select" },
-				{ fieldname: "currency", label: __("Currency"), reqd:1,
-					fieldtype: "Select" },
-			],
-
-			onload: function(slide) {
-				frappe.call({
-					method:"frappe.geo.country_info.get_country_timezone_info",
-					callback: function(data) {
-						erpnext.wiz.region.data = data.message;
-						erpnext.wiz.region.setup_fields(slide);
-						erpnext.wiz.region.bind_events(slide);
-					}
-				});
-			},
-			css_class: "single-column",
-			setup_fields: function(slide) {
-				var data = erpnext.wiz.region.data;
-
-				slide.get_input("country").empty()
-					.add_options([""].concat(keys(data.country_info).sort()));
-
-				slide.get_input("currency").empty()
-					.add_options(frappe.utils.unique([""].concat($.map(data.country_info,
-						function(opts, country) { return opts.currency; }))).sort());
-
-				slide.get_input("timezone").empty()
-					.add_options([""].concat(data.all_timezones));
-
-				if (data.default_country) {
-					slide.set_input("country", data.default_country);
-				}
-			},
-
-			bind_events: function(slide) {
-				slide.get_input("country").on("change", function() {
-					var country = slide.get_input("country").val();
-					var $timezone = slide.get_input("timezone");
-					var data = erpnext.wiz.region.data;
-
-					$timezone.empty();
-
-					// add country specific timezones first
-					if(country) {
-						var timezone_list = data.country_info[country].timezones || [];
-						$timezone.add_options(timezone_list.sort());
-						slide.get_field("currency").set_input(data.country_info[country].currency);
-						slide.get_field("currency").$input.trigger("change");
-					}
-
-					// add all timezones at the end, so that user has the option to change it to any timezone
-					$timezone.add_options([""].concat(data.all_timezones));
-
-					slide.get_field("timezone").set_input($timezone.val());
-
-					// temporarily set date format
-					frappe.boot.sysdefaults.date_format = (data.country_info[country].date_format
-						|| "dd-mm-yyyy");
-				});
-
-				slide.get_input("currency").on("change", function() {
-					var currency = slide.get_input("currency").val();
-					if (!currency) return;
-					frappe.model.with_doc("Currency", currency, function() {
-						frappe.provide("locals.:Currency." + currency);
-						var currency_doc = frappe.model.get_doc("Currency", currency);
-						var number_format = currency_doc.number_format;
-						if (number_format==="#.###") {
-							number_format = "#.###,##";
-						} else if (number_format==="#,###") {
-							number_format = "#,###.##"
-						}
-
-						frappe.boot.sysdefaults.number_format = number_format;
-						locals[":Currency"][currency] = $.extend({}, currency_doc);
-					});
-				});
-			}
-		},
-
-		user: {
-			title: __("The First User: You"),
-			icon: "icon-user",
-			fields: [
-				{"fieldname": "first_name", "label": __("First Name"), "fieldtype": "Data",
-					reqd:1},
-				{"fieldname": "last_name", "label": __("Last Name"), "fieldtype": "Data"},
-				{"fieldname": "email", "label": __("Email Address"), "fieldtype": "Data",
-					reqd:1, "description": __("You will use it to Login"), "options":"Email"},
-				{"fieldname": "password", "label": __("Password"), "fieldtype": "Password",
-					reqd:1},
-				{fieldtype:"Attach Image", fieldname:"attach_user",
-					label: __("Attach Your Picture"), is_private: 0},
-			],
-			help: __('The first user will become the System Manager (you can change this later).'),
-			onload: function(slide) {
-				if(user!=="Administrator") {
-					slide.form.fields_dict.password.$wrapper.toggle(false);
-					slide.form.fields_dict.email.$wrapper.toggle(false);
-					slide.form.fields_dict.first_name.set_input(frappe.boot.user.first_name);
-					slide.form.fields_dict.last_name.set_input(frappe.boot.user.last_name);
-
-					var user_image = frappe.get_cookie("user_image");
-					if(user_image) {
-						var $attach_user = slide.form.fields_dict.attach_user.$wrapper;
-						$attach_user.find(".missing-image").toggle(false);
-						$attach_user.find("img").attr("src", decodeURIComponent(user_image)).toggle(true);
-					}
-
-					delete slide.form.fields_dict.email;
-					delete slide.form.fields_dict.password;
-				}
-			},
-			css_class: "single-column"
-		},
-
 		org: {
+			app_name: "erpnext",
 			title: __("The Organization"),
 			icon: "icon-building",
 			fields: [
@@ -145,6 +22,14 @@ function load_erpnext_slides() {
 					placeholder:__('e.g. "Build tools for builders"'), reqd:1},
 				{fieldname:'bank_account', label: __('Bank Account'), fieldtype:'Data',
 					placeholder: __('e.g. "XYZ National Bank"'), reqd:1 },
+				{fieldname:'domain', label: __('Domain'), fieldtype:'Select',
+					options: [
+						{"label": __("Distribution"), "value": "Distribution"},
+						{"label": __("Manufacturing"), "value": "Manufacturing"},
+						{"label": __("Retail"), "value": "Retail"},
+						{"label": __("Services"), "value": "Services"},
+						{"label": __("Other"), "value": "Other"},
+					], reqd:1},
 				{fieldname:'chart_of_accounts', label: __('Chart of Accounts'),
 					options: "", fieldtype: 'Select'},
 
@@ -248,6 +133,7 @@ function load_erpnext_slides() {
 		},
 
 		branding: {
+			app_name: "erpnext",
 			icon: "icon-bookmark",
 			title: __("The Brand"),
 			help: __('Upload your letter head and logo. (you can edit them later).'),
@@ -269,10 +155,11 @@ function load_erpnext_slides() {
 		},
 
 		users: {
+			app_name: "erpnext",
 			icon: "icon-money",
-			"title": __("Add Users"),
-			"help": __("Add users to your organization, other than yourself"),
-			"fields": [],
+			title: __("Add Users"),
+			help: __("Add users to your organization, other than yourself"),
+			fields: [],
 			before_load: function(slide) {
 				slide.fields = [];
 				for(var i=1; i<5; i++) {
@@ -297,9 +184,10 @@ function load_erpnext_slides() {
 		},
 
 		taxes: {
+			app_name: "erpnext",
 			icon: "icon-money",
-			"title": __("Add Taxes"),
-			"help": __("List your tax heads (e.g. VAT, Customs etc; they should have unique names) and their standard rates. This will create a standard template, which you can edit and add more later."),
+			title: __("Add Taxes"),
+			help: __("List your tax heads (e.g. VAT, Customs etc; they should have unique names) and their standard rates. This will create a standard template, which you can edit and add more later."),
 			"fields": [],
 			before_load: function(slide) {
 				slide.fields = [];
@@ -317,10 +205,11 @@ function load_erpnext_slides() {
 		},
 
 		customers: {
+			app_name: "erpnext",
 			icon: "icon-group",
-			"title": __("Your Customers"),
-			"help": __("List a few of your customers. They could be organizations or individuals."),
-			"fields": [],
+			title: __("Your Customers"),
+			help: __("List a few of your customers. They could be organizations or individuals."),
+			fields: [],
 			before_load: function(slide) {
 				slide.fields = [];
 				for(var i=1; i<6; i++) {
@@ -339,10 +228,11 @@ function load_erpnext_slides() {
 		},
 
 		suppliers: {
+			app_name: "erpnext",
 			icon: "icon-group",
-			"title": __("Your Suppliers"),
-			"help": __("List a few of your suppliers. They could be organizations or individuals."),
-			"fields": [],
+			title: __("Your Suppliers"),
+			help: __("List a few of your suppliers. They could be organizations or individuals."),
+			fields: [],
 			before_load: function(slide) {
 				slide.fields = [];
 				for(var i=1; i<6; i++) {
@@ -361,10 +251,11 @@ function load_erpnext_slides() {
 		},
 
 		items: {
+			app_name: "erpnext",
 			icon: "icon-barcode",
-			"title": __("Your Products or Services"),
-			"help": __("List your products or services that you buy or sell. Make sure to check the Item Group, Unit of Measure and other properties when you start."),
-			"fields": [],
+			title: __("Your Products or Services"),
+			help: __("List your products or services that you buy or sell. Make sure to check the Item Group, Unit of Measure and other properties when you start."),
+			fields: [],
 			before_load: function(slide) {
 				slide.fields = [];
 				for(var i=1; i<6; i++) {
@@ -424,7 +315,6 @@ function load_erpnext_slides() {
 
 frappe.wiz.on("before_load", function() {
 	load_erpnext_slides();
-	frappe.wiz.add_slide(erpnext.wiz.user);
 	frappe.wiz.add_slide(erpnext.wiz.org);
 	frappe.wiz.add_slide(erpnext.wiz.branding);
 	frappe.wiz.add_slide(erpnext.wiz.users);

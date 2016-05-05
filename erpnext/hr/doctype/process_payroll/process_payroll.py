@@ -80,9 +80,9 @@ class ProcessPayroll(Document):
 
 
 	def create_log(self, ss_list):
-		log = "<p>No employee for the above selected criteria OR salary slip already created</p>"
+		log = "<p>" + _("No employee for the above selected criteria OR salary slip already created") + "</p>"
 		if ss_list:
-			log = "<b>Salary Slip Created For</b>\
+			log = "<b>" + _("Salary Slip Created") + "</b>\
 			<br><br>%s" % '<br>'.join(self.format_as_links(ss_list))
 		return log
 
@@ -188,7 +188,7 @@ class ProcessPayroll(Document):
 
 		return journal_entry.as_dict()
 
-
+@frappe.whitelist()
 def get_month_details(year, month):
 	ysd = frappe.db.get_value("Fiscal Year", year, "year_start_date")
 	if ysd:
@@ -206,3 +206,5 @@ def get_month_details(year, month):
 			'month_end_date': med,
 			'month_days': month_days
 		})
+	else:
+		frappe.throw(_("Fiscal Year {0} not found").format(year))

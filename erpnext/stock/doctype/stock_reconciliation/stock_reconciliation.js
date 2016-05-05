@@ -1,8 +1,6 @@
 // Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 // License: GNU General Public License v3. See license.txt
 
-frappe.require("assets/erpnext/js/controllers/stock_controller.js");
-frappe.require("assets/erpnext/js/utils.js");
 frappe.provide("erpnext.stock");
 
 frappe.ui.form.on("Stock Reconciliation", {
@@ -10,27 +8,21 @@ frappe.ui.form.on("Stock Reconciliation", {
 		// end of life
 		frm.set_query("item_code", "items", function(doc, cdt, cdn) {
 			return {
-				filters:[
-					['Item', 'end_of_life', '>=', frappe.datetime.nowdate()]
-				]
+				query: "erpnext.controllers.queries.item_query",
+				filters:{
+					"is_stock_item": 1,
+					"has_serial_no": 0
+				}
 			}
 		});
 	},
 
 	refresh: function(frm) {
 		if(frm.doc.docstatus < 1) {
-			frm.add_custom_button(__("Get Items"), function() {
+			frm.add_custom_button(__("Items"), function() {
 				frm.events.get_items(frm);
 			});
 		}
-	},
-
-	company: function(frm) {
-		erpnext.get_fiscal_year(frm.doc.company, frm.doc.posting_date);
-	},
-
-	posting_date: function(frm) {
-		erpnext.get_fiscal_year(frm.doc.company, frm.doc.posting_date);
 	},
 
 	get_items: function(frm) {

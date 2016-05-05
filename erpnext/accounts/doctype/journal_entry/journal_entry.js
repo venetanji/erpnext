@@ -3,7 +3,7 @@
 
 frappe.provide("erpnext.accounts");
 frappe.provide("erpnext.journal_entry");
-frappe.require("assets/erpnext/js/utils.js");
+
 
 frappe.ui.form.on("Journal Entry", {
 	refresh: function(frm) {
@@ -11,7 +11,7 @@ frappe.ui.form.on("Journal Entry", {
 		frm.cscript.voucher_type(frm.doc);
 
 		if(frm.doc.docstatus==1) {
-			frm.add_custom_button(__('View Ledger'), function() {
+			frm.add_custom_button(__('Ledger'), function() {
 				frappe.route_options = {
 					"voucher_no": frm.doc.name,
 					"from_date": frm.doc.posting_date,
@@ -50,6 +50,7 @@ erpnext.accounts.JournalEntry = frappe.ui.form.Controller.extend({
 	},
 
 	load_defaults: function() {
+		this.frm.show_print_first = true;
 		if(this.frm.doc.__islocal && this.frm.doc.company) {
 			frappe.model.set_default_values(this.frm.doc);
 			$.each(this.frm.doc.accounts || [], function(i, jvd) {
@@ -217,16 +218,6 @@ erpnext.accounts.JournalEntry = frappe.ui.form.Controller.extend({
 
 cur_frm.script_manager.make(erpnext.accounts.JournalEntry);
 
-cur_frm.cscript.company = function(doc, cdt, cdn) {
-	cur_frm.refresh_fields();
-	erpnext.get_fiscal_year(doc.company, doc.posting_date);
-}
-
-cur_frm.cscript.posting_date = function(doc, cdt, cdn){
-	cur_frm.posting_date = cur_frm.doc.posting_date;
-	erpnext.get_fiscal_year(doc.company, doc.posting_date);
-}
-
 cur_frm.cscript.update_totals = function(doc) {
 	var td=0.0; var tc =0.0;
 	var accounts = doc.accounts || [];
@@ -347,6 +338,7 @@ frappe.ui.form.on("Journal Entry Account", {
 				callback: function(r) {
 					if(r.message) {
 						$.extend(d, r.message);
+						erpnext.journal_entry.set_debit_credit_in_company_currency(frm, dt, dn);
 						refresh_field('accounts');
 					}
 				}
@@ -355,11 +347,11 @@ frappe.ui.form.on("Journal Entry Account", {
 	},
 
 	debit_in_account_currency: function(frm, cdt, cdn) {
-		erpnext.journal_entry.set_debit_credit_in_company_currency(frm, cdt, cdn);
+		erpnext.journal_entry.set_exchange_rate(frm, cdt, cdn);
 	},
 
 	credit_in_account_currency: function(frm, cdt, cdn) {
-		erpnext.journal_entry.set_debit_credit_in_company_currency(frm, cdt, cdn);
+		erpnext.journal_entry.set_exchange_rate(frm, cdt, cdn);
 	},
 
 	debit: function(frm, dt, dn) {
@@ -368,6 +360,17 @@ frappe.ui.form.on("Journal Entry Account", {
 
 	credit: function(frm, dt, dn) {
 		cur_frm.cscript.update_totals(frm.doc);
+	},
+
+	exchange_rate: function(frm, cdt, cdn) {
+		var company_currency = frappe.get_doc(":Company", frm.doc.company).default_currency;
+		var row = locals[cdt][cdn];
+
+		if(row.account_currency == company_currency || !frm.doc.multi_currency) {
+			frappe.model.set_value(cdt, cdn, "exchange_rate", 1);
+		}
+
+		erpnext.journal_entry.set_debit_credit_in_company_currency(frm, cdt, cdn);
 	}
 })
 
@@ -395,16 +398,14 @@ $.extend(erpnext.journal_entry, {
 	},
 
 	set_debit_credit_in_company_currency: function(frm, cdt, cdn) {
-		erpnext.journal_entry.set_exchange_rate(frm, cdt, cdn);
-
 		var row = locals[cdt][cdn];
 
 		frappe.model.set_value(cdt, cdn, "debit",
-			flt(flt(row.debit_in_account_currency)*row.exchange_rate), precision("debit", row));
+			flt(flt(row.debit_in_account_currency)*row.exchange_rate, precision("debit", row)));
 
 		frappe.model.set_value(cdt, cdn, "credit",
-			flt(flt(row.credit_in_account_currency)*row.exchange_rate), precision("credit", row));
-			
+			flt(flt(row.credit_in_account_currency)*row.exchange_rate, precision("credit", row)));
+
 		cur_frm.cscript.update_totals(frm.doc);
 	},
 
@@ -413,7 +414,8 @@ $.extend(erpnext.journal_entry, {
 		var row = locals[cdt][cdn];
 
 		if(row.account_currency == company_currency || !frm.doc.multi_currency) {
-			frappe.model.set_value(cdt, cdn, "exchange_rate", 1);
+			row.exchange_rate = 1;
+			erpnext.journal_entry.set_debit_credit_in_company_currency(frm, cdt, cdn);
 		} else if (!row.exchange_rate || row.exchange_rate == 1 || row.account_type == "Bank") {
 			frappe.call({
 				method: "erpnext.accounts.doctype.journal_entry.journal_entry.get_exchange_rate",
@@ -429,11 +431,15 @@ $.extend(erpnext.journal_entry, {
 				},
 				callback: function(r) {
 					if(r.message) {
-						frappe.model.set_value(cdt, cdn, "exchange_rate", r.message);
+						row.exchange_rate = r.message;
+						erpnext.journal_entry.set_debit_credit_in_company_currency(frm, cdt, cdn);
 					}
 				}
 			})
+		} else {
+			erpnext.journal_entry.set_debit_credit_in_company_currency(frm, cdt, cdn);
 		}
+		refresh_field("exchange_rate", cdn, "accounts");
 	},
 
 	quick_entry: function(frm) {
@@ -458,6 +464,7 @@ $.extend(erpnext.journal_entry, {
 				},
 				{fieldtype: "Date", fieldname: "posting_date", label: __("Date"), reqd: 1,
 					default: frm.doc.posting_date},
+				{fieldtype: "Small Text", fieldname: "user_remark", label: __("User Remark"), reqd: 1},
 				{fieldtype: "Select", fieldname: "naming_series", label: __("Series"), reqd: 1,
 					options: naming_series_options, default: naming_series_default},
 			]
@@ -468,6 +475,7 @@ $.extend(erpnext.journal_entry, {
 			var values = dialog.get_values();
 
 			frm.set_value("posting_date", values.posting_date);
+			frm.set_value("user_remark", values.user_remark);
 			frm.set_value("naming_series", values.naming_series);
 
 			// clear table is used because there might've been an error while adding child

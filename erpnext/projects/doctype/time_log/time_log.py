@@ -4,7 +4,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe import _
-from frappe.utils import cstr, flt, get_datetime, get_time, getdate
+from frappe.utils import flt, get_datetime, get_time, getdate
 from dateutil.relativedelta import relativedelta
 from erpnext.manufacturing.doctype.manufacturing_settings.manufacturing_settings import get_mins_between_operations
 
@@ -45,16 +45,19 @@ class TimeLog(Document):
 
 	def set_status(self):
 		self.status = {
-			0: "Draft",
+			0: "To Submit",
 			1: "Submitted",
 			2: "Cancelled"
 		}[self.docstatus or 0]
 
+		if not self.to_time:
+			self.status = 'In Progress'
+
 		if self.time_log_batch:
-			self.status="Batched for Billing"
+			self.status= "Batched for Billing"
 
 		if self.sales_invoice:
-			self.status="Billed"
+			self.status= "Billed"
 
 	def set_title(self):
 		"""Set default title for the Time Log"""
@@ -88,19 +91,16 @@ class TimeLog(Document):
 		existing = frappe.db.sql("""select name, from_time, to_time from `tabTime Log`
 			where `{0}`=%(val)s and
 			(
-				(from_time > %(from_time)s and from_time < %(to_time)s) or
-				(to_time > %(from_time)s and to_time < %(to_time)s) or
 				(%(from_time)s > from_time and %(from_time)s < to_time) or
-				(%(from_time)s = from_time and %(to_time)s = to_time))
+				(%(to_time)s > from_time and %(to_time)s < to_time) or
+				(%(from_time)s <= from_time and %(to_time)s >= to_time))
 			and name!=%(name)s
-			and ifnull(task, "")=%(task)s
 			and docstatus < 2""".format(fieldname),
 			{
 				"val": self.get(fieldname),
 				"from_time": self.from_time,
 				"to_time": self.to_time,
-				"name": self.name or "No Name",
-				"task": cstr(self.task)
+				"name": self.name or "No Name"
 			}, as_dict=True)
 
 		return existing[0] if existing else None
@@ -196,7 +196,7 @@ class TimeLog(Document):
 			or self.get_overlap_for("user")
 
 		if not overlapping:
-			frappe.throw("Logical error: Must find overlapping")
+			frappe.throw(_("Logical error: Must find overlapping"))
 
 		self.from_time = get_datetime(overlapping.to_time) + get_mins_between_operations()
 
@@ -237,6 +237,9 @@ class TimeLog(Document):
 			else:
 				self.billing_amount = 0
 
+		if self.additional_cost and self.billable:
+			self.billing_amount += self.additional_cost
+
 	def update_task_and_project(self):
 		"""Update costing rate in Task or Project if either is set"""
 
@@ -247,6 +250,11 @@ class TimeLog(Document):
 
 		elif self.project:
 			frappe.get_doc("Project", self.project).update_project()
+
+	def has_webform_permission(doc):
+		project_user = frappe.db.get_value("Project User", {"parent": doc.project, "user":frappe.session.user} , "user")
+		if project_user:
+			return True
 
 
 @frappe.whitelist()

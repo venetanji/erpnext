@@ -16,10 +16,10 @@ class FiscalYearError(frappe.ValidationError): pass
 class BudgetError(frappe.ValidationError): pass
 
 @frappe.whitelist()
-def get_fiscal_year(date=None, fiscal_year=None, label="Date", verbose=1, company=None):
-	return get_fiscal_years(date, fiscal_year, label, verbose, company)[0]
+def get_fiscal_year(date=None, fiscal_year=None, label="Date", verbose=1, company=None, as_dict=False):
+	return get_fiscal_years(date, fiscal_year, label, verbose, company, as_dict=as_dict)[0]
 
-def get_fiscal_years(transaction_date=None, fiscal_year=None, label="Date", verbose=1, company=None):
+def get_fiscal_years(transaction_date=None, fiscal_year=None, label="Date", verbose=1, company=None, as_dict=False):
 	# if year start date is 2012-04-01, year end date should be 2013-03-31 (hence subdate)
 	cond = " disabled = 0"
 	if fiscal_year:
@@ -36,10 +36,10 @@ def get_fiscal_years(transaction_date=None, fiscal_year=None, label="Date", verb
 			"fiscal_year": fiscal_year,
 			"transaction_date": transaction_date,
 			"company": company
-		})
+		}, as_dict=as_dict)
 
 	if not fy:
-		error_msg = _("""{0} {1} not in any active Fiscal Year. For more details check {2}.""").format(label, formatdate(transaction_date), "https://erpnext.com/kb/accounts/fiscal-year-error")
+		error_msg = _("""{0} {1} not in any active Fiscal Year. For more details check {2}.""").format(label, formatdate(transaction_date), "https://frappe.github.io/erpnext/user/manual/en/accounts/articles/fiscal-year-error")
 		if verbose==1: frappe.msgprint(error_msg)
 		raise FiscalYearError, error_msg
 	return fy
@@ -105,11 +105,11 @@ def get_balance_on(account=None, date=None, party_type=None, party=None, in_acco
 			if acc.account_currency == frappe.db.get_value("Company", acc.company, "default_currency"):
 				in_account_currency = False
 		else:
-			cond.append("""gle.account = "%s" """ % (frappe.db.escape(account), ))
+			cond.append("""gle.account = "%s" """ % (frappe.db.escape(account, percent=False), ))
 
 	if party_type and party:
 		cond.append("""gle.party_type = "%s" and gle.party = "%s" """ %
-			(frappe.db.escape(party_type), frappe.db.escape(party)))
+			(frappe.db.escape(party_type), frappe.db.escape(party, percent=False)))
 
 	if account or (party_type and party):
 		if in_account_currency:
@@ -247,7 +247,7 @@ def update_against_doc(d, jv_obj):
 
 	# will work as update after submit
 	jv_obj.flags.ignore_validate_update_after_submit = True
-	jv_obj.save()
+	jv_obj.save(ignore_permissions=True)
 
 def remove_against_link_from_jv(ref_type, ref_no):
 	linked_jv = frappe.db.sql_list("""select parent from `tabJournal Entry Account`
@@ -383,7 +383,7 @@ def get_actual_expense(args):
 def get_currency_precision(currency=None):
 	if not currency:
 		currency = frappe.db.get_value("Company",
-			frappe.db.get_default("company"), "default_currency", cache=True)
+			frappe.db.get_default("Company"), "default_currency", cache=True)
 	currency_format = frappe.db.get_value("Currency", currency, "number_format", cache=True)
 
 	from frappe.utils import get_number_format_info
@@ -477,3 +477,14 @@ def get_outstanding_invoices(party_type, party, account, condition=None):
 		})
 
 	return outstanding_invoices
+
+
+def get_account_name(account_type=None, root_type=None, is_group=None, account_currency=None, company=None):
+	"""return account based on matching conditions"""
+	return frappe.db.get_value("Account", {
+		"account_type": account_type or '',
+		"root_type": root_type or '',
+		"is_group": is_group or 0,
+		"account_currency": account_currency or frappe.defaults.get_defaults().currency,
+		"company": company or frappe.defaults.get_defaults().company
+	}, "name")

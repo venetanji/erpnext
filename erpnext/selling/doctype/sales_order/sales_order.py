@@ -10,6 +10,7 @@ from frappe import _
 from frappe.model.mapper import get_mapped_doc
 from erpnext.stock.stock_balance import update_bin_qty, get_reserved_qty
 from frappe.desk.notifications import clear_doctype_notifications
+from erpnext.controllers.recurring_document import month_map, get_next_date
 
 from erpnext.controllers.selling_controller import SellingController
 
@@ -102,23 +103,23 @@ class SalesOrder(SellingController):
 		self.validate_sales_mntc_quotation()
 
 	def validate_proj_cust(self):
-		if self.project_name and self.customer_name:
+		if self.project and self.customer_name:
 			res = frappe.db.sql("""select name from `tabProject` where name = %s
 				and (customer = %s or ifnull(customer,'')='')""",
-					(self.project_name, self.customer))
+					(self.project, self.customer))
 			if not res:
-				frappe.throw(_("Customer {0} does not belong to project {1}").format(self.customer, self.project_name))
+				frappe.throw(_("Customer {0} does not belong to project {1}").format(self.customer, self.project))
 
 	def validate_warehouse(self):
 		super(SalesOrder, self).validate_warehouse()
-		
+
 		for d in self.get("items"):
 			if (frappe.db.get_value("Item", d.item_code, "is_stock_item")==1 or
 				(self.has_product_bundle(d.item_code) and self.product_bundle_has_stock_item(d.item_code))) \
 				and not d.warehouse and not cint(d.delivered_by_supplier):
 				frappe.throw(_("Delivery warehouse required for stock item {0}").format(d.item_code),
 					WarehouseRequired)
-			
+
 	def validate_with_previous_doc(self):
 		super(SalesOrder, self).validate_with_previous_doc({
 			"Quotation": {
@@ -149,8 +150,6 @@ class SalesOrder(SellingController):
 				frappe.throw(_("Row #{0}: Set Supplier for item {1}").format(d.idx, d.item_code))
 
 	def on_submit(self):
-		super(SalesOrder, self).on_submit()
-
 		self.check_credit_limit()
 		self.update_reserved_qty()
 
@@ -159,9 +158,9 @@ class SalesOrder(SellingController):
 		self.update_prevdoc_status('submit')
 
 	def on_cancel(self):
-		# Cannot cancel stopped SO
-		if self.status == 'Stopped':
-			frappe.throw(_("Stopped order cannot be cancelled. Unstop to cancel."))
+		# Cannot cancel closed SO
+		if self.status == 'Closed':
+			frappe.throw(_("Closed order cannot be cancelled. Unclose to cancel."))
 
 		self.check_nextdoc_docstatus()
 		self.update_reserved_qty()
@@ -192,7 +191,7 @@ class SalesOrder(SellingController):
 		#check maintenance schedule
 		submit_ms = frappe.db.sql_list("""select t1.name from `tabMaintenance Schedule` t1,
 			`tabMaintenance Schedule Item` t2
-			where t2.parent=t1.name and t2.prevdoc_docname = %s and t1.docstatus = 1""", self.name)
+			where t2.parent=t1.name and t2.sales_order = %s and t1.docstatus = 1""", self.name)
 		if submit_ms:
 			frappe.throw(_("Maintenance Schedule {0} must be cancelled before cancelling this Sales Order").format(comma_and(submit_ms)))
 
@@ -285,18 +284,43 @@ class SalesOrder(SellingController):
 
 			delivered_qty += item.delivered_qty
 			tot_qty += item.qty
-			
-		frappe.db.set_value("Sales Order", self.name, "per_delivered", flt(delivered_qty/tot_qty) * 100, 
+
+		frappe.db.set_value("Sales Order", self.name, "per_delivered", flt(delivered_qty/tot_qty) * 100,
 		update_modified=False)
+
+	def set_indicator(self):
+		"""Set indicator for portal"""
+		if self.per_billed < 100 and self.per_delivered < 100:
+			self.indicator_color = "orange"
+			self.indicator_title = _("Not Paid and Not Delivered")
+
+		elif self.per_billed == 100 and self.per_delivered < 100:
+			self.indicator_color = "orange"
+			self.indicator_title = _("Paid and Not Delivered")
+
+		else:
+			self.indicator_color = "green"
+			self.indicator_title = _("Paid")
+
+	def on_recurring(self, reference_doc):
+		mcount = month_map[reference_doc.recurring_type]
+		self.set("delivery_date", get_next_date(reference_doc.delivery_date, mcount,
+						cint(reference_doc.repeat_on_day_of_month)))
 
 def get_list_context(context=None):
 	from erpnext.controllers.website_list_for_contact import get_list_context
 	list_context = get_list_context(context)
-	list_context["title"] = _("My Orders")
+	list_context.update({
+		'show_sidebar': True,
+		'show_search': True,
+		'no_breadcrumbs': True,
+		'title': _('Orders'),
+	})
+
 	return list_context
 
 @frappe.whitelist()
-def stop_or_unstop_sales_orders(names, status):
+def close_or_unclose_sales_orders(names, status):
 	if not frappe.has_permission("Sales Order", "write"):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
@@ -304,30 +328,23 @@ def stop_or_unstop_sales_orders(names, status):
 	for name in names:
 		so = frappe.get_doc("Sales Order", name)
 		if so.docstatus == 1:
-			if status in ("Stopped", "Closed"):
-				if so.status not in ("Stopped", "Cancelled", "Closed") and (so.per_delivered < 100 or so.per_billed < 100):
+			if status == "Closed":
+				if so.status not in ("Cancelled", "Closed") and (so.per_delivered < 100 or so.per_billed < 100):
 					so.update_status(status)
 			else:
-				if so.status in ("Stopped", "Closed"):
+				if so.status == "Closed":
 					so.update_status('Draft')
 
 	frappe.local.message_log = []
-
-	def before_recurring(self):
-		super(SalesOrder, self).before_recurring()
-
-		for field in ("delivery_status", "per_delivered", "billing_status", "per_billed"):
-			self.set(field, None)
-
-		for d in self.get("items"):
-			for field in ("delivered_qty", "billed_amt", "planned_qty", "prevdoc_docname"):
-				d.set(field, None)
-
 
 @frappe.whitelist()
 def make_material_request(source_name, target_doc=None):
 	def postprocess(source, doc):
 		doc.material_request_type = "Purchase"
+
+	def update_item(source, target, source_parent):
+		target.project = source_parent.project
+
 
 	so = frappe.get_doc("Sales Order", source_name)
 
@@ -343,9 +360,10 @@ def make_material_request(source_name, target_doc=None):
 		item_table: {
 			"doctype": "Material Request Item",
 			"field_map": {
-				"parent": "sales_order_no",
+				"parent": "sales_order",
 				"stock_uom": "uom"
-			}
+			},
+			"postprocess": update_item
 		}
 	}, target_doc, postprocess)
 
@@ -401,7 +419,7 @@ def make_delivery_note(source_name, target_doc=None):
 	return target_doc
 
 @frappe.whitelist()
-def make_sales_invoice(source_name, target_doc=None):
+def make_sales_invoice(source_name, target_doc=None, ignore_permissions=False):
 	def postprocess(source, target):
 		set_missing_values(source, target)
 		#Get the advance paid Journal Entries in Sales Invoice Advance
@@ -410,6 +428,7 @@ def make_sales_invoice(source_name, target_doc=None):
 	def set_missing_values(source, target):
 		target.is_pos = 0
 		target.ignore_pricing_rule = 1
+		target.flags.ignore_permissions = True
 		target.run_method("set_missing_values")
 		target.run_method("calculate_taxes_and_totals")
 
@@ -421,6 +440,9 @@ def make_sales_invoice(source_name, target_doc=None):
 	doclist = get_mapped_doc("Sales Order", source_name, {
 		"Sales Order": {
 			"doctype": "Sales Invoice",
+			"field_map": {
+				"party_account_currency": "party_account_currency"
+			},
 			"validation": {
 				"docstatus": ["=", 1]
 			}
@@ -442,7 +464,7 @@ def make_sales_invoice(source_name, target_doc=None):
 			"doctype": "Sales Team",
 			"add_if_empty": True
 		}
-	}, target_doc, postprocess)
+	}, target_doc, postprocess, ignore_permissions=ignore_permissions)
 
 	return doclist
 
@@ -450,15 +472,12 @@ def make_sales_invoice(source_name, target_doc=None):
 def make_maintenance_schedule(source_name, target_doc=None):
 	maint_schedule = frappe.db.sql("""select t1.name
 		from `tabMaintenance Schedule` t1, `tabMaintenance Schedule Item` t2
-		where t2.parent=t1.name and t2.prevdoc_docname=%s and t1.docstatus=1""", source_name)
+		where t2.parent=t1.name and t2.sales_order=%s and t1.docstatus=1""", source_name)
 
 	if not maint_schedule:
 		doclist = get_mapped_doc("Sales Order", source_name, {
 			"Sales Order": {
 				"doctype": "Maintenance Schedule",
-				"field_map": {
-					"name": "sales_order_no"
-				},
 				"validation": {
 					"docstatus": ["=", 1]
 				}
@@ -466,7 +485,7 @@ def make_maintenance_schedule(source_name, target_doc=None):
 			"Sales Order Item": {
 				"doctype": "Maintenance Schedule Item",
 				"field_map": {
-					"parent": "prevdoc_docname"
+					"parent": "sales_order"
 				},
 				"add_if_empty": True
 			}
@@ -485,9 +504,6 @@ def make_maintenance_visit(source_name, target_doc=None):
 		doclist = get_mapped_doc("Sales Order", source_name, {
 			"Sales Order": {
 				"doctype": "Maintenance Visit",
-				"field_map": {
-					"name": "sales_order_no"
-				},
 				"validation": {
 					"docstatus": ["=", 1]
 				}
@@ -518,7 +534,9 @@ def get_events(start, end, filters=None):
 	data = frappe.db.sql("""select name, customer_name, delivery_status, billing_status, delivery_date
 		from `tabSales Order`
 		where (ifnull(delivery_date, '0000-00-00')!= '0000-00-00') \
-				and (delivery_date between %(start)s and %(end)s) {conditions}
+				and (delivery_date between %(start)s and %(end)s)
+				and docstatus < 2
+				{conditions}
 		""".format(conditions=conditions), {
 			"start": start,
 			"end": end
@@ -533,20 +551,20 @@ def make_purchase_order_for_drop_shipment(source_name, for_supplier, target_doc=
 		default_price_list = frappe.get_value("Supplier", for_supplier, "default_price_list")
 		if default_price_list:
 			target.buying_price_list = default_price_list
-		
+
 		if any( item.delivered_by_supplier==1 for item in source.items):
 			if source.shipping_address_name:
-				target.customer_address = source.shipping_address_name
-				target.customer_address_display = source.shipping_address
+				target.shipping_address = source.shipping_address_name
+				target.shipping_address_display = source.shipping_address
 			else:
-				target.customer_address = source.customer_address
-				target.customer_address_display = source.address_display
-			
+				target.shipping_address = source.customer_address
+				target.shipping_address_display = source.address_display
+
 			target.customer_contact_person = source.contact_person
 			target.customer_contact_display = source.contact_display
 			target.customer_contact_mobile = source.contact_mobile
 			target.customer_contact_email = source.contact_email
-			
+
 		else:
 			target.customer = ""
 			target.customer_name = ""

@@ -2,13 +2,15 @@
 // License: GNU General Public License v3. See license.txt
 
 frappe.provide("erpnext.crm");
-frappe.require("assets/erpnext/js/utils.js");
+
 cur_frm.email_field = "contact_email";
 frappe.ui.form.on("Opportunity", {
 	customer: function(frm) {
 		erpnext.utils.get_party_details(frm);
 	},
-	customer_address: erpnext.utils.get_address_display,
+	customer_address: function(frm, cdt, cdn){
+		erpnext.utils.get_address_display(frm, 'customer_address', 'address_display', false);
+	},
 	contact_person: erpnext.utils.get_contact_details,
 	enquiry_from: function(frm) {
 		frm.toggle_reqd("lead", frm.doc.enquiry_from==="Lead");
@@ -29,10 +31,8 @@ erpnext.crm.Opportunity = frappe.ui.form.Controller.extend({
 
 		if(!this.frm.doc.status)
 			set_multiple(cdt, cdn, { status:'Draft' });
-		if(!this.frm.doc.company && frappe.defaults.get_user_default("company"))
-			set_multiple(cdt, cdn, { company:frappe.defaults.get_user_default("company") });
-		if(!this.frm.doc.fiscal_year && sys_defaults.fiscal_year)
-			set_multiple(cdt, cdn, { fiscal_year:sys_defaults.fiscal_year });
+		if(!this.frm.doc.company && frappe.defaults.get_user_default("Company"))
+			set_multiple(cdt, cdn, { company:frappe.defaults.get_user_default("Company") });
 
 		this.setup_queries();
 	},
@@ -51,9 +51,7 @@ erpnext.crm.Opportunity = frappe.ui.form.Controller.extend({
 
 		this.frm.set_query("item_code", "items", function() {
 			return {
-				query: "erpnext.controllers.queries.item_query",
-				filters: me.frm.doc.enquiry_type === "Maintenance" ?
-					{"is_service_item": 1} : {"is_sales_item":1}
+				query: "erpnext.controllers.queries.item_query"
 			};
 		});
 
@@ -78,28 +76,29 @@ $.extend(cur_frm.cscript, new erpnext.crm.Opportunity({frm: cur_frm}));
 cur_frm.cscript.refresh = function(doc, cdt, cdn) {
 	erpnext.toggle_naming_series();
 
-	if(doc.status!=="Lost") {
-		cur_frm.add_custom_button(__('Create Quotation'),
-			cur_frm.cscript.create_quotation, frappe.boot.doctype_icons["Quotation"],
-			"btn-default");
-		if(doc.status!=="Quotation")
-			cur_frm.add_custom_button(__('Opportunity Lost'),
-				cur_frm.cscript['Declare Opportunity Lost'], "icon-remove", "btn-default");
-	}
-
 	var frm = cur_frm;
 	if(frm.perm[0].write && doc.docstatus==0) {
 		if(frm.doc.status==="Open") {
-			frm.add_custom_button("Close", function() {
+			frm.add_custom_button(__("Close"), function() {
 				frm.set_value("status", "Closed");
 				frm.save();
-			});
+			}, __("Status"));
 		} else {
-			frm.add_custom_button("Reopen", function() {
+			frm.add_custom_button(__("Reopen"), function() {
 				frm.set_value("status", "Open");
 				frm.save();
-			});
+			}, __("Status"));
 		}
+	}
+
+	if(doc.status!=="Lost") {
+		if(doc.status!=="Quotation") {
+			cur_frm.add_custom_button(__('Lost'),
+				cur_frm.cscript['Declare Opportunity Lost'], __("Status"));
+		}
+
+		cur_frm.add_custom_button(__('Quotation'),cur_frm.cscript.create_quotation, __("Make"));
+		cur_frm.page.set_inner_btn_group_as_primary(__("Make"));
 	}
 
 }
@@ -165,14 +164,4 @@ cur_frm.cscript['Declare Opportunity Lost'] = function() {
 		})
 	});
 	dialog.show();
-}
-
-
-
-cur_frm.cscript.company = function(doc, cdt, cdn) {
-	erpnext.get_fiscal_year(doc.company, doc.transaction_date);
-}
-
-cur_frm.cscript.transaction_date = function(doc, cdt, cdn){
-	erpnext.get_fiscal_year(doc.company, doc.transaction_date);
 }

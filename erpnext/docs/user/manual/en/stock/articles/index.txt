@@ -1,9 +1,8 @@
 allow-over-delivery-billing-against-sales-order-upto-certain-limit
 auto-creation-of-material-request
-creating-depreciation-for-item
-is-stock-item-field-frozen-in-item-master
+depreciation-entry
+maintain-stock-field-frozen-in-item-master
 manage-rejected-finished-goods-items
-managing-assets
 managing-batch-wise-inventory
 managing-fractions-in-uom
 opening-stock-balance-entry-for-the-serialized-and-batch-item
@@ -12,4 +11,3 @@ serial-no-naming
 stock-entry-purpose
 stock-level-report
 track-items-using-barcode
-using-batch-feature-in-stock-entry

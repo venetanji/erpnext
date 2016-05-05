@@ -10,7 +10,8 @@ from frappe.utils import flt, cint, cstr
 from frappe.desk.reportview import build_match_conditions
 from erpnext.utilities.transaction_base import TransactionBase
 from erpnext.utilities.address_and_contact import load_address_and_contact
-from erpnext.accounts.party import validate_party_accounts
+from erpnext.accounts.party import validate_party_accounts, get_timeline_data
+from erpnext.accounts.party_status import get_party_status
 
 class Customer(TransactionBase):
 	def get_feed(self):
@@ -19,6 +20,7 @@ class Customer(TransactionBase):
 	def onload(self):
 		"""Load address and contacts in `__onload`"""
 		load_address_and_contact(self, "customer")
+		self.set_onload('links', self.meta.get_links_setup())
 
 	def autoname(self):
 		cust_master_name = frappe.defaults.get_global_default('cust_master_name')
@@ -42,6 +44,7 @@ class Customer(TransactionBase):
 	def validate(self):
 		self.flags.is_new_doc = self.is_new()
 		validate_party_accounts(self)
+		self.status = get_party_status(self)
 
 	def update_lead_status(self):
 		if self.lead_name:
@@ -125,33 +128,17 @@ class Customer(TransactionBase):
 			{set_field} where customer=%(newdn)s"""\
 			.format(set_field=set_field), ({"newdn": newdn}))
 
+
 @frappe.whitelist()
-def get_dashboard_info(customer):
-	if not frappe.has_permission("Customer", "read", customer):
-		frappe.msgprint(_("Not permitted"), raise_exception=True)
+def get_dashboard_data(name):
+	'''load dashboard related data'''
+	frappe.has_permission(doc=frappe.get_doc('Customer', name), throw=True)
 
-	out = {}
-	for doctype in ["Opportunity", "Quotation", "Sales Order", "Delivery Note",
-		"Sales Invoice", "Project"]:
-		out[doctype] = frappe.db.get_value(doctype,
-			{"customer": customer, "docstatus": ["!=", 2] }, "count(*)")
-
-	billing_this_year = frappe.db.sql("""
-		select sum(debit_in_account_currency) - sum(credit_in_account_currency)
-		from `tabGL Entry`
-		where voucher_type='Sales Invoice' and party_type = 'Customer'
-			and party=%s and fiscal_year = %s""",
-		(customer, frappe.db.get_default("fiscal_year")))
-
-	total_unpaid = frappe.db.sql("""select sum(outstanding_amount)
-		from `tabSales Invoice`
-		where customer=%s and docstatus = 1""", customer)
-
-	out["billing_this_year"] = billing_this_year[0][0] if billing_this_year else 0
-	out["total_unpaid"] = total_unpaid[0][0] if total_unpaid else 0
-
-	return out
-
+	from frappe.desk.notifications import get_open_count
+	return {
+		'count': get_open_count('Customer', name),
+		'timeline_data': get_timeline_data('Customer', name),
+	}
 
 def get_customer_list(doctype, txt, searchfield, start, page_len, filters):
 	if frappe.db.get_default("cust_master_name") == "Customer Name":
@@ -199,7 +186,7 @@ def get_customer_outstanding(customer, company):
 		select sum(base_grand_total*(100 - per_billed)/100)
 		from `tabSales Order`
 		where customer=%s and docstatus = 1 and company=%s
-		and per_billed < 100 and status != 'Stopped'""", (customer, company))
+		and per_billed < 100 and status != 'Closed'""", (customer, company))
 
 	outstanding_based_on_so = flt(outstanding_based_on_so[0][0]) if outstanding_based_on_so else 0.0
 
@@ -210,7 +197,7 @@ def get_customer_outstanding(customer, company):
 		where
 			dn.name = dn_item.parent
 			and dn.customer=%s and dn.company=%s
-			and dn.docstatus = 1 and dn.status != 'Stopped'
+			and dn.docstatus = 1 and dn.status not in ('Closed', 'Stopped')
 			and ifnull(dn_item.against_sales_order, '') = ''
 			and ifnull(dn_item.against_sales_invoice, '') = ''""", (customer, company), as_dict=True)
 
@@ -229,9 +216,15 @@ def get_customer_outstanding(customer, company):
 
 
 def get_credit_limit(customer, company):
-	credit_limit, customer_group = frappe.db.get_value("Customer", customer, ["credit_limit", "customer_group"])
-	if not credit_limit:
-		credit_limit = frappe.db.get_value("Customer Group", customer_group, "credit_limit") or \
-			frappe.db.get_value("Company", company, "credit_limit")
+	credit_limit = None
 
-	return credit_limit
+	if customer:
+		credit_limit, customer_group = frappe.db.get_value("Customer", customer, ["credit_limit", "customer_group"])
+
+		if not credit_limit:
+			credit_limit = frappe.db.get_value("Customer Group", customer_group, "credit_limit")
+
+	if not credit_limit:
+		credit_limit = frappe.db.get_value("Company", company, "credit_limit")
+
+	return flt(credit_limit)

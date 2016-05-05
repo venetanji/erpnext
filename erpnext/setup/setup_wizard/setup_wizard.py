@@ -10,8 +10,8 @@ from frappe.utils.file_manager import save_file
 from .default_website import website_maker
 import install_fixtures
 from .sample_data import make_sample_data
-from erpnext.accounts.utils import FiscalYearError
 from erpnext.accounts.doctype.account.account import RootNotEditable
+from frappe.core.doctype.communication.comment import add_info_comment
 
 def setup_complete(args=None):
 	if frappe.db.sql("select name from tabCompany"):
@@ -19,7 +19,6 @@ def setup_complete(args=None):
 
 	install_fixtures.install(args.get("country"))
 
-	update_user_name(args)
 	create_fiscal_year_and_company(args)
 	create_users(args)
 	set_defaults(args)
@@ -46,68 +45,61 @@ def setup_complete(args=None):
 		try:
 			make_sample_data()
 			frappe.clear_cache()
-		except FiscalYearError:
+		except:
+			# clear message
+			if frappe.message_log:
+				frappe.message_log.pop()
+
 			pass
 
-
-def update_user_name(args):
-	if args.get("email"):
-		args['name'] = args.get("email")
-
-		_mute_emails, frappe.flags.mute_emails = frappe.flags.mute_emails, True
-		doc = frappe.get_doc({
-			"doctype":"User",
-			"email": args.get("email"),
-			"first_name": args.get("first_name"),
-			"last_name": args.get("last_name")
-		})
-		doc.flags.no_welcome_mail = True
-		doc.insert()
-		frappe.flags.mute_emails = _mute_emails
-		from frappe.auth import _update_password
-		_update_password(args.get("email"), args.get("password"))
-
-	else:
-		args['name'] = frappe.session.user
-
-		# Update User
-		if not args.get('last_name') or args.get('last_name')=='None':
-				args['last_name'] = None
-		frappe.db.sql("""update `tabUser` SET first_name=%(first_name)s,
-			last_name=%(last_name)s WHERE name=%(name)s""", args)
-
-	if args.get("attach_user"):
-		attach_user = args.get("attach_user").split(",")
-		if len(attach_user)==3:
-			filename, filetype, content = attach_user
-			fileurl = save_file(filename, content, "User", args.get("name"), decode=True).file_url
-			frappe.db.set_value("User", args.get("name"), "user_image", fileurl)
-
-	add_all_roles_to(args.get("name"))
-
 def create_fiscal_year_and_company(args):
-	curr_fiscal_year = get_fy_details(args.get('fy_start_date'), args.get('fy_end_date'))
-	frappe.get_doc({
+	if (args.get('fy_start_date')):
+		curr_fiscal_year = get_fy_details(args.get('fy_start_date'), args.get('fy_end_date'))
+		frappe.get_doc({
 		"doctype":"Fiscal Year",
 		'year': curr_fiscal_year,
 		'year_start_date': args.get('fy_start_date'),
 		'year_end_date': args.get('fy_end_date'),
-	}).insert()
+		}).insert()
+		args["curr_fiscal_year"] = curr_fiscal_year
 
 	# Company
-	frappe.get_doc({
-		"doctype":"Company",
-		'domain': args.get("industry"),
-		'company_name':args.get('company_name').strip(),
-		'abbr':args.get('company_abbr'),
-		'default_currency':args.get('currency'),
-		'country': args.get('country'),
-		'chart_of_accounts': args.get(('chart_of_accounts')),
-	}).insert()
+	if (args.get('company_name')):
+		frappe.get_doc({
+			"doctype":"Company",
+			'company_name':args.get('company_name').strip(),
+			'abbr':args.get('company_abbr'),
+			'default_currency':args.get('currency'),
+			'country': args.get('country'),
+			'chart_of_accounts': args.get(('chart_of_accounts')),
+			'domain': args.get('domain')
+		}).insert()
 
-	# Bank Account
+		# Bank Account
+		create_bank_account(args)
 
-	args["curr_fiscal_year"] = curr_fiscal_year
+def create_bank_account(args):
+	if args.get("bank_account"):
+		company_name = args.get('company_name').strip()
+		bank_account_group =  frappe.db.get_value("Account",
+			{"account_type": "Bank", "is_group": 1, "root_type": "Asset",
+				"company": company_name})
+		if bank_account_group:
+			bank_account = frappe.get_doc({
+				"doctype": "Account",
+				'account_name': args.get("bank_account"),
+				'parent_account': bank_account_group,
+				'is_group':0,
+				'company': company_name,
+				"account_type": "Bank",
+			})
+			try:
+				return bank_account.insert()
+			except RootNotEditable:
+				frappe.throw(_("Bank account cannot be named as {0}").format(args.get("bank_account")))
+			except frappe.DuplicateEntryError:
+				# bank account same as a CoA entry
+				pass
 
 def create_price_lists(args):
 	for pl_type, pl_name in (("Selling", _("Standard Selling")), ("Buying", _("Standard Buying"))):
@@ -143,6 +135,7 @@ def set_defaults(args):
 	stock_settings = frappe.get_doc("Stock Settings")
 	stock_settings.item_naming_by = "Item Code"
 	stock_settings.valuation_method = "FIFO"
+	stock_settings.default_warehouse = frappe.db.get_value('Warehouse', {'warehouse_name': _('Stores')})
 	stock_settings.stock_uom = _("Nos")
 	stock_settings.auto_indent = 1
 	stock_settings.auto_insert_price_list_rate_if_missing = 1
@@ -174,11 +167,9 @@ def set_defaults(args):
 
 def create_feed_and_todo():
 	"""update Activity feed and create todo for creation of item, customer, vendor"""
-	frappe.get_doc({
-		"doctype": "Feed",
-		"feed_type": "Comment",
-		"subject": "ERPNext Setup Complete!"
-	}).insert(ignore_permissions=True)
+	add_info_comment(**{
+		"subject": _("ERPNext Setup Complete!")
+	})
 
 def create_email_digest():
 	from frappe.utils.user import get_system_managers
@@ -286,7 +277,6 @@ def create_items(args):
 			is_sales_item = args.get("is_sales_item_" + str(i))
 			is_purchase_item = args.get("is_purchase_item_" + str(i))
 			is_stock_item = item_group!=_("Services")
-			is_pro_applicable = item_group!=_("Services")
 			default_warehouse = ""
 			if is_stock_item:
 				default_warehouse = frappe.db.get_value("Warehouse", filters={
@@ -300,11 +290,8 @@ def create_items(args):
 					"item_code": item,
 					"item_name": item,
 					"description": item,
-					"is_sales_item": 1 if is_sales_item else 0,
-					"is_purchase_item": 1 if is_purchase_item else 0,
 					"show_in_website": 1,
 					"is_stock_item": is_stock_item and 1 or 0,
-					"is_pro_applicable": is_pro_applicable and 1 or 0,
 					"item_group": item_group,
 					"stock_uom": args.get("item_uom_" + str(i)),
 					"default_warehouse": default_warehouse
@@ -345,7 +332,7 @@ def create_customers(args):
 		customer = args.get("customer_" + str(i))
 		if customer:
 			try:
-				frappe.get_doc({
+				doc = frappe.get_doc({
 					"doctype":"Customer",
 					"customer_name": customer,
 					"customer_type": "Company",
@@ -356,7 +343,7 @@ def create_customers(args):
 
 				if args.get("customer_contact_" + str(i)):
 					create_contact(args.get("customer_contact_" + str(i)),
-						"customer", customer)
+						"customer", doc.name)
 			except frappe.NameError:
 				pass
 
@@ -365,7 +352,7 @@ def create_suppliers(args):
 		supplier = args.get("supplier_" + str(i))
 		if supplier:
 			try:
-				frappe.get_doc({
+				doc = frappe.get_doc({
 					"doctype":"Supplier",
 					"supplier_name": supplier,
 					"supplier_type": _("Local"),
@@ -374,7 +361,7 @@ def create_suppliers(args):
 
 				if args.get("supplier_contact_" + str(i)):
 					create_contact(args.get("supplier_contact_" + str(i)),
-						"supplier", supplier)
+						"supplier", doc.name)
 			except frappe.NameError:
 				pass
 
@@ -413,14 +400,6 @@ def create_logo(args):
 			frappe.db.set_value("Website Settings", "Website Settings", "brand_html",
 				"<img src='{0}' style='max-width: 40px; max-height: 25px;'> {1}".format(fileurl, args.get("company_name").strip()))
 
-def add_all_roles_to(name):
-	user = frappe.get_doc("User", name)
-	for role in frappe.db.sql("""select name from tabRole"""):
-		if role[0] not in ["Administrator", "Guest", "All", "Customer", "Supplier", "Partner", "Employee"]:
-			d = user.append("user_roles")
-			d.role = role[0]
-	user.save()
-
 def create_territories():
 	"""create two default territories, one for home country and one named Rest of the World"""
 	from frappe.utils.nestedset import get_root_of
@@ -443,7 +422,7 @@ def create_users(args):
 	# create employee for self
 	emp = frappe.get_doc({
 		"doctype": "Employee",
-		"full_name": " ".join(filter(None, [args.get("first_name"), args.get("last_name")])),
+		"employee_name": " ".join(filter(None, [args.get("first_name"), args.get("last_name")])),
 		"user_id": frappe.session.user,
 		"status": "Active",
 		"company": args.get("company_name")
@@ -487,7 +466,7 @@ def create_users(args):
 				# create employee
 				emp = frappe.get_doc({
 					"doctype": "Employee",
-					"full_name": fullname,
+					"employee_name": fullname,
 					"user_id": email,
 					"status": "Active",
 					"company": args.get("company_name")

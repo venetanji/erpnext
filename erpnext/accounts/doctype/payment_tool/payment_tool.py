@@ -71,7 +71,9 @@ class PaymentTool(Document):
 			d2.account = self.payment_account
 			d2.account_currency = bank_account_currency
 			d2.account_type = bank_account_type
-			d2.exchange_rate = get_exchange_rate(self.payment_account, self.company)
+			d2.exchange_rate = get_exchange_rate(self.payment_account, bank_account_currency, self.company, 
+				debit=(abs(total_payment_amount) if total_payment_amount < 0 else 0), 
+				credit=(total_payment_amount if total_payment_amount > 0 else 0))
 			d2.account_balance = get_balance_on(self.payment_account)
 		
 		amount_field_bank = 'debit_in_account_currency' if total_payment_amount < 0 \
@@ -131,7 +133,7 @@ def get_orders_to_be_billed(party_type, party, party_account_currency, company_c
 		where
 			{party_type} = %s
 			and docstatus = 1
-			and ifnull(status, "") != "Stopped"
+			and ifnull(status, "") != "Closed"
 			and {ref_field} > advance_paid
 			and abs(100 - per_billed) > 0.01
 		""".format(**{

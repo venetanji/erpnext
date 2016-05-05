@@ -20,23 +20,23 @@ frappe.ui.form.on("Task", {
 				frm.add_custom_button(__("Time Logs"), function() {
 					frappe.route_options = {"project": doc.project, "task": doc.name}
 					frappe.set_route("List", "Time Log");
-				}, "icon-list", true);
+				}, __("View"), true);
 			}
 			if(frappe.model.can_read("Expense Claim")) {
 				frm.add_custom_button(__("Expense Claims"), function() {
 					frappe.route_options = {"project": doc.project, "task": doc.name}
 					frappe.set_route("List", "Expense Claim");
-				}, "icon-list", true);
+				}, __("View"), true);
 			}
 
 			if(frm.perm[0].write) {
 				if(frm.doc.status!=="Closed" && frm.doc.status!=="Cancelled") {
-					frm.add_custom_button("Close", function() {
+					frm.add_custom_button(__("Close"), function() {
 						frm.set_value("status", "Closed");
 						frm.save();
 					});
 				} else {
-					frm.add_custom_button("Reopen", function() {
+					frm.add_custom_button(__("Reopen"), function() {
 						frm.set_value("status", "Open");
 						frm.save();
 					});

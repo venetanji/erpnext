@@ -4,22 +4,33 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.utils import cint, cstr, flt
-
 from frappe import _
 from frappe.model.document import Document
 
 from operator import itemgetter
 
-class BOM(Document):
+form_grid_templates = {
+	"items": "templates/form_grid/item_grid.html"
+}
 
+class BOM(Document):
 	def autoname(self):
-		last_name = frappe.db.sql("""select max(name) from `tabBOM`
-			where name like "BOM/%s/%%" """ % frappe.db.escape(self.item))
-		if last_name:
-			idx = cint(cstr(last_name[0][0]).split('/')[-1].split('-')[0]) + 1
+		names = frappe.db.sql_list("""select name from `tabBOM` where item=%s""", self.item)
+
+		if names:
+			# name can be BOM/ITEM/001, BOM/ITEM/001-1, BOM-ITEM-001, BOM-ITEM-001-1
+
+			# split by item
+			names = [name.split(self.item)[-1][1:] for name in names]
+
+			# split by (-) if cancelled
+			names = [cint(name.split('-')[-1]) for name in names]
+
+			idx = max(names) + 1
 		else:
 			idx = 1
-		self.name = 'BOM/' + self.item + ('/%.3i' % idx)
+
+		self.name = 'BOM-' + self.item + ('-%.3i' % idx)
 
 	def validate(self):
 		self.clear_operations()
@@ -53,9 +64,8 @@ class BOM(Document):
 		self.manage_default_bom()
 
 	def get_item_det(self, item_code):
-		item = frappe.db.sql("""select name, item_name, is_asset_item, is_purchase_item,
-			docstatus, description, image, is_sub_contracted_item, stock_uom, default_bom,
-			last_purchase_rate
+		item = frappe.db.sql("""select name, item_name, docstatus, description, image, 
+			is_sub_contracted_item, stock_uom, default_bom, last_purchase_rate
 			from `tabItem` where name=%s""", item_code, as_dict = 1)
 
 		if not item:
@@ -107,7 +117,7 @@ class BOM(Document):
 		rate = 0
 		if arg['bom_no']:
 			rate = self.get_bom_unitcost(arg['bom_no'])
-		elif arg and (arg['is_purchase_item'] == 1 or arg['is_sub_contracted_item'] == 1):
+		elif arg:
 			if self.rm_cost_as_per == 'Valuation Rate':
 				rate = self.get_valuation_rate(arg)
 			elif self.rm_cost_as_per == 'Last Purchase Rate':
@@ -197,6 +207,9 @@ class BOM(Document):
 			self.description = ret[0]
 			self.uom = ret[1]
 			self.item_name= ret[2]
+
+		if not self.quantity:
+			frappe.throw(_("Quantity should be greater than 0"))
 
 	def validate_materials(self):
 		""" Validate raw material entries """

@@ -1,7 +1,5 @@
 // Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors // License: GNU General Public License v3. See license.txt
 
-frappe.require("assets/erpnext/js/controllers/stock_controller.js");
-frappe.require("assets/erpnext/js/utils.js");
 frappe.provide("erpnext.stock");
 
 erpnext.stock.StockEntry = erpnext.stock.StockController.extend({
@@ -55,12 +53,15 @@ erpnext.stock.StockEntry = erpnext.stock.StockController.extend({
 
 	onload_post_render: function() {
 		var me = this;
-		cur_frm.get_field("items").grid.set_multiple_add("item_code", "qty");
 		this.set_default_account(function() {
 			if(me.frm.doc.__islocal && me.frm.doc.company && !me.frm.doc.amended_from) {
 				cur_frm.script_manager.trigger("company");
 			}
 		});
+
+		if(!this.item_selector) {
+			this.item_selector = new erpnext.ItemSelector({frm: this.frm});
+		}
 	},
 
 	refresh: function() {
@@ -72,6 +73,7 @@ erpnext.stock.StockEntry = erpnext.stock.StockController.extend({
 		if (cint(frappe.defaults.get_default("auto_accounting_for_stock"))) {
 			this.show_general_ledger();
 		}
+		erpnext.hide_company();
 	},
 
 	on_submit: function() {
@@ -133,7 +135,7 @@ erpnext.stock.StockEntry = erpnext.stock.StockController.extend({
 	qty: function(doc, cdt, cdn) {
 		var d = locals[cdt][cdn];
 		d.transfer_qty = flt(d.qty) * flt(d.conversion_factor);
-		refresh_field('items');
+		this.calculate_basic_amount(d);
 	},
 
 	production_order: function() {
@@ -176,12 +178,13 @@ erpnext.stock.StockEntry = erpnext.stock.StockController.extend({
 
 	add_excise_button: function() {
 		if(frappe.boot.sysdefaults.country === "India")
-			this.frm.add_custom_button(__("Make Excise Invoice"), function() {
+			this.frm.add_custom_button(__("Excise Invoice"), function() {
 				var excise = frappe.model.make_new_doc_and_get_name('Journal Entry');
 				excise = locals['Journal Entry'][excise];
 				excise.voucher_type = 'Excise Entry';
-				loaddoc('Journal Entry', excise.name);
-			}, frappe.boot.doctype_icons["Journal Entry"], "btn-default");
+				frappe.set_route('Form', 'Journal Entry', excise.name);
+			}, __("Make"));
+			cur_frm.page.set_inner_btn_group_as_primary(__("Make"));
 	},
 
 	items_add: function(doc, cdt, cdn) {
@@ -227,7 +230,89 @@ erpnext.stock.StockEntry = erpnext.stock.StockController.extend({
 
 	items_on_form_rendered: function(doc, grid_row) {
 		erpnext.setup_serial_no();
-	}
+	},
+
+	basic_rate: function(doc, cdt, cdn) {
+		var item = frappe.model.get_doc(cdt, cdn);
+		this.calculate_basic_amount(item);
+	},
+
+	s_warehouse: function(doc, cdt, cdn) {
+		this.get_warehouse_details(doc, cdt, cdn)
+	},
+
+	t_warehouse: function(doc, cdt, cdn) {
+		this.get_warehouse_details(doc, cdt, cdn)
+	},
+
+	get_warehouse_details: function(doc, cdt, cdn) {
+		var me = this;
+		var d = locals[cdt][cdn];
+		if(!d.bom_no) {
+			frappe.call({
+				method: "erpnext.stock.doctype.stock_entry.stock_entry.get_warehouse_details",
+				args: {
+					"args": {
+						'item_code': d.item_code,
+						'warehouse': cstr(d.s_warehouse) || cstr(d.t_warehouse),
+						'transfer_qty': d.transfer_qty,
+						'serial_no': d.serial_no,
+						'qty': d.s_warehouse ? -1* d.qty : d.qty,
+						'posting_date': this.frm.doc.posting_date,
+						'posting_time': this.frm.doc.posting_time
+					}
+				},
+				callback: function(r) {
+					if (!r.exc) {
+						$.extend(d, r.message);
+						me.calculate_basic_amount(d);
+					}
+				}
+			});
+		}
+	},
+
+	calculate_basic_amount: function(item) {
+		item.basic_amount = flt(flt(item.transfer_qty) * flt(item.basic_rate),
+			precision("basic_amount", item));
+
+		this.calculate_amount();
+	},
+
+	calculate_amount: function() {
+		this.calculate_total_additional_costs();
+
+		var total_basic_amount = frappe.utils.sum(
+			(this.frm.doc.items || []).map(function(i) { return i.t_warehouse ? flt(i.basic_amount) : 0; })
+		);
+
+		for (var i in this.frm.doc.items) {
+			var item = this.frm.doc.items[i];
+
+			if (item.t_warehouse && total_basic_amount) {
+				item.additional_cost = (flt(item.basic_amount) / total_basic_amount) * this.frm.doc.total_additional_costs;
+			} else {
+				item.additional_cost = 0;
+			}
+
+			item.amount = flt(item.basic_amount + flt(item.additional_cost),
+				precision("amount", item));
+
+			item.valuation_rate = flt(flt(item.basic_rate)
+				+ (flt(item.additional_cost) / flt(item.transfer_qty)),
+				precision("valuation_rate", item));
+		}
+
+		refresh_field('items');
+	},
+
+	calculate_total_additional_costs: function() {
+		var total_additional_costs = frappe.utils.sum(
+			(this.frm.doc.additional_costs || []).map(function(c) { return flt(c.amount); })
+		);
+
+		this.frm.set_value("total_additional_costs", flt(total_additional_costs, precision("total_additional_costs")));
+	},
 });
 
 cur_frm.script_manager.make(erpnext.stock.StockEntry);
@@ -346,23 +431,6 @@ cur_frm.cscript.barcode = function(doc, cdt, cdn) {
 	}
 }
 
-cur_frm.cscript.s_warehouse = function(doc, cdt, cdn) {
-	var d = locals[cdt][cdn];
-	if(!d.bom_no) {
-		args = {
-			'item_code'		: d.item_code,
-			'warehouse'		: cstr(d.s_warehouse) || cstr(d.t_warehouse),
-			'transfer_qty'	: d.transfer_qty,
-			'serial_no'		: d.serial_no,
-			'qty'			: d.s_warehouse ? -1* d.qty : d.qty
-		}
-		return get_server_fields('get_warehouse_details', JSON.stringify(args),
-			'items', doc, cdt, cdn, 1);
-	}
-}
-
-cur_frm.cscript.t_warehouse = cur_frm.cscript.s_warehouse;
-
 cur_frm.cscript.uom = function(doc, cdt, cdn) {
 	var d = locals[cdt][cdn];
 	if(d.uom && d.item_code){
@@ -394,15 +462,16 @@ cur_frm.cscript.cost_center = function(doc, cdt, cdn) {
 
 cur_frm.cscript.company = function(doc, cdt, cdn) {
 	if(doc.company) {
-		erpnext.get_fiscal_year(doc.company, doc.posting_date, function() {
-			var company_doc = frappe.get_doc(":Company", doc.company);
-			if(company_doc.default_letter_head) {
-				cur_frm.set_value("letter_head", company_doc.default_letter_head);
-			}
-		});
+		var company_doc = frappe.get_doc(":Company", doc.company);
+		if(company_doc.default_letter_head) {
+			cur_frm.set_value("letter_head", company_doc.default_letter_head);
+		}
 	}
 }
 
-cur_frm.cscript.posting_date = function(doc, cdt, cdn){
-	erpnext.get_fiscal_year(doc.company, doc.posting_date);
-}
+
+frappe.ui.form.on('Landed Cost Taxes and Charges', {
+	amount: function(frm) {
+		frm.cscript.calculate_amount();
+	}
+})
